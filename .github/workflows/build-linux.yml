@@ -66,7 +66,7 @@ jobs:
           test -x build/helper/lasgen/lasgen
 
       - name: Fetch pinned Linux Zig compiler
-        run: tools/fetch_zig.sh
+        run: bash tools/fetch_zig.sh
 
       - name: Assemble release bundle
         shell: bash
