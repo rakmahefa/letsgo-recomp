@@ -32,6 +32,11 @@ jobs:
           sudo apt-get install -y clang lld make cmake ninja-build pkg-config \
             libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
             libvulkan-dev libshaderc-dev glslc spirv-tools \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev \
+            libxi-dev libxinerama-dev libxss-dev libxkbcommon-dev \
+            libwayland-dev wayland-protocols libdecor-0-dev libegl1-mesa-dev \
+            libasound2-dev libpulse-dev libpipewire-0.3-dev libdbus-1-dev \
+            libibus-1.0-dev libudev-dev \
             python3 python3-venv python3-pip patchelf zip unzip
 
       - name: Build SDL3 from source
