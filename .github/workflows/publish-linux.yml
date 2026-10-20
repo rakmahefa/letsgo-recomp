@@ -72,8 +72,23 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$TAG" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "Invalid tag name" >&2; exit 1; }
-          test "$(find artifact -maxdepth 1 -name 'LetsGoRecomp-*-linux-x86_64.tar.gz' | wc -l)" -eq 1
-          (cd artifact && sha256sum -c ./*.sha256)
+          bundles=(artifact/LetsGoRecomp-*-linux-x86_64.tar.gz)
+          checksums=(artifact/LetsGoRecomp-*-linux-x86_64.tar.gz.sha256)
+          [[ "${#bundles[@]}" -eq 1 && -f "${bundles[0]}" ]] || {
+            echo "Expected exactly one Linux bundle in the downloaded artifact." >&2; exit 1;
+          }
+          [[ "${#checksums[@]}" -eq 1 && -f "${checksums[0]}" ]] || {
+            echo "Expected exactly one SHA-256 checksum file in the downloaded artifact." >&2; exit 1;
+          }
+          expected="$(awk 'NR == 1 { print $1 }' "${checksums[0]}")"
+          actual="$(sha256sum "${bundles[0]}" | awk '{ print $1 }')"
+          [[ "$expected" =~ ^[[:xdigit:]]{64}$ ]] || {
+            echo "Checksum file does not contain a valid SHA-256 digest." >&2; exit 1;
+          }
+          [[ "$actual" == "$expected" ]] || {
+            echo "SHA-256 mismatch for ${bundles[0]}." >&2; exit 1;
+          }
+          echo "SHA-256 verified for ${bundles[0]}."
           if gh release view "$TAG" --repo "$REPOSITORY" >/dev/null 2>&1; then
             echo "Release/tag $TAG already exists; refusing to overwrite it." >&2
             exit 1
