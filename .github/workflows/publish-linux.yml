@@ -1,6 +1,14 @@
 name: Publish Linux release from successful build
 
 on:
+  # Validate the workflow on the feature branch without publishing anything.
+  push:
+    branches: ["feature/native-linux"]
+    paths:
+      - ".github/workflows/publish-linux.yml"
+  pull_request:
+    paths:
+      - ".github/workflows/publish-linux.yml"
   workflow_dispatch:
     inputs:
       run_id:
@@ -14,7 +22,7 @@ on:
       release_name:
         description: Release title
         required: true
-        default: Let's Go Recomp for Linux
+        default: "Let's Go Recomp for Linux"
         type: string
       prerelease:
         description: Mark this release as a prerelease
@@ -27,7 +35,16 @@ permissions:
   contents: write
 
 jobs:
+  # Push and PR runs prove GitHub can load this workflow; they never publish a release.
+  validate-workflow:
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Confirm publish workflow is loadable
+        run: echo "Publish workflow syntax loaded. Release publishing is disabled for push and pull_request events."
+
   publish:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     steps:
       - name: Validate build run
