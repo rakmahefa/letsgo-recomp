@@ -49,19 +49,18 @@ jobs:
 
       - name: Validate bundle and tag
         env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
           TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           [[ "$TAG" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "Invalid tag name" >&2; exit 1; }
           test "$(find artifact -maxdepth 1 -name 'LetsGoRecomp-*-linux-x86_64.tar.gz' | wc -l)" -eq 1
           (cd artifact && sha256sum -c ./*.sha256)
-          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+          if gh release view "$TAG" --repo "$REPOSITORY" >/dev/null 2>&1; then
             echo "Release/tag $TAG already exists; refusing to overwrite it." >&2
             exit 1
           fi
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag }}
 
       - name: Create GitHub Release and upload bundle
         env:
