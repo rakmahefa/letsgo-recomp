@@ -37,7 +37,7 @@ jobs:
             libwayland-dev wayland-protocols libdecor-0-dev libegl1-mesa-dev \
             libasound2-dev libpulse-dev libpipewire-0.3-dev libdbus-1-dev \
             libibus-1.0-dev libudev-dev \
-            python3 python3-venv python3-pip patchelf zip unzip squashfs-tools desktop-file-utils
+            python3 python3-venv python3-pip patchelf zip unzip squashfs-tools desktop-file-utils imagemagick
 
       - name: Install Clang 21 toolchain
         run: |
@@ -164,7 +164,7 @@ jobs:
           appdir="$GITHUB_WORKSPACE/build/dist/LetsGoRecomp"
           bindir="$appdir/usr/bin"
           mkdir -p "$bindir/gamelib-src" "$appdir/usr/share/applications" \
-            "$appdir/usr/share/icons/hicolor/1024x1024/apps" "$appdir/usr/share/licenses/LetsGoRecomp"
+            "$appdir/usr/share/icons/hicolor/512x512/apps" "$appdir/usr/share/licenses/LetsGoRecomp"
 
           install -m 755 build/lasrecomp "$bindir/LetsGoRecomp"
           cp -a build/helper/lasgen "$bindir/"
@@ -185,8 +185,9 @@ jobs:
           install -m 644 build/licenses/SPIRV-Tools-LICENSE.txt "$appdir/usr/share/licenses/LetsGoRecomp/"
           install -m 644 build/licenses/SPIRV-Headers-LICENSE.txt "$appdir/usr/share/licenses/LetsGoRecomp/"
 
-          cp docs/icon/icon_1024.png "$appdir/lets-go-recomp.png"
-          cp docs/icon/icon_1024.png "$appdir/usr/share/icons/hicolor/1024x1024/apps/lets-go-recomp.png"
+          convert docs/icon/icon_1024.png -resize 512x512 "$appdir/lets-go-recomp.png"
+          test "$(identify -format '%wx%h' "$appdir/lets-go-recomp.png")" = "512x512"
+          cp "$appdir/lets-go-recomp.png" "$appdir/usr/share/icons/hicolor/512x512/apps/lets-go-recomp.png"
           ln -sfn lets-go-recomp.png "$appdir/.DirIcon"
 
           cat > "$appdir/lets-go-recomp.desktop" <<'EOF'
