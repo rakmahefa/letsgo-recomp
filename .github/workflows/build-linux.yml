@@ -278,8 +278,7 @@ jobs:
           extracted="$GITHUB_WORKSPACE/build/dist/appimage-smoke/squashfs-root"
           test -x "$extracted/AppRun"
           test -x "$extracted/usr/bin/LetsGoRecomp"
-          find "$extracted/usr/lib" "$extracted/usr/lib64" "$extracted/usr/lib/x86_64-linux-gnu" \
-            -name 'libavformat.so.60*' -print -quit 2>/dev/null | grep -q .
+          find "$extracted/usr" -name 'libavformat.so.60*' -print -quit | grep -q .
           extracted_ldd="$(LD_LIBRARY_PATH="$extracted/usr/lib:$extracted/usr/lib64:$extracted/usr/lib/x86_64-linux-gnu" ldd "$extracted/usr/bin/LetsGoRecomp")"
           if grep -q "not found" <<<"$extracted_ldd"; then
             echo "Extracted AppImage has unresolved shared-library dependencies." >&2
