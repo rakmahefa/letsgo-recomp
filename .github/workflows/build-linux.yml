@@ -260,14 +260,13 @@ jobs:
           desktop-file-validate "$appdir/lets-go-recomp.desktop"
 
           cd "$GITHUB_WORKSPACE/build/dist"
-          # Preserve debug sections because linuxdeploy's strip phase crashes on this ELF.
-          # Do not pass the onedir lasgen helper or nested Zig binary as --executable: linuxdeploy
-          # flattens their basename into usr/bin, colliding with the existing helper directories.
+          # Keep the onedir lasgen helper and Zig binary in their nested directories.
+          # Passing either as --executable would flatten its basename into usr/bin and collide with those directories.
           LDAI_OUTPUT="$appimage" \
           LDAI_VERSION="$version" \
           LINUXDEPLOY_OUTPUT_APP_NAME=LetsGoRecomp \
           LINUXDEPLOY_OUTPUT_VERSION="$version" \
-          NO_STRIP=1 APPIMAGE_EXTRACT_AND_RUN=1 "$tool" \
+          APPIMAGE_EXTRACT_AND_RUN=1 "$tool" \
             --appdir "$appdir" \
             --executable "$appdir/usr/bin/LetsGoRecomp" \
             --desktop-file "$appdir/lets-go-recomp.desktop" \
