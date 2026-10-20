@@ -1,0 +1,79 @@
+name: Publish Linux release from successful build
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful Linux build workflow run ID (shown in its summary)
+        required: true
+        type: string
+      tag:
+        description: Release tag, for example v0.6.0-linux. Must not already exist.
+        required: true
+        type: string
+      release_name:
+        description: Release title
+        required: true
+        default: Let's Go Recomp for Linux
+        type: string
+      prerelease:
+        description: Mark this release as a prerelease
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Validate build run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          set -euo pipefail
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo "run_id must be numeric" >&2; exit 1; }
+          gh run view "$RUN_ID" --repo "$REPOSITORY" --json status,conclusion,workflowName,event
+          status="$(gh run view "$RUN_ID" --repo "$REPOSITORY" --json status --jq .status)"
+          conclusion="$(gh run view "$RUN_ID" --repo "$REPOSITORY" --json conclusion --jq .conclusion)"
+          workflow="$(gh run view "$RUN_ID" --repo "$REPOSITORY" --json workflowName --jq .workflowName)"
+          [[ "$status" == completed && "$conclusion" == success && "$workflow" == "Linux native build" ]] || {
+            echo "Refusing to publish: the run must be a successful Linux native build." >&2; exit 1;
+          }
+          gh run download "$RUN_ID" --repo "$REPOSITORY" --name letsgo-recomp-linux-x86_64 --dir artifact
+
+      - name: Validate bundle and tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "Invalid tag name" >&2; exit 1; }
+          test "$(find artifact -maxdepth 1 -name 'LetsGoRecomp-*-linux-x86_64.tar.gz' | wc -l)" -eq 1
+          (cd artifact && sha256sum -c ./*.sha256)
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release/tag $TAG already exists; refusing to overwrite it." >&2
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+
+      - name: Create GitHub Release and upload bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+          RELEASE_NAME: ${{ inputs.release_name }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          set -euo pipefail
+          args=(release create "$TAG" artifact/*.tar.gz artifact/*.sha256
+            --repo "$REPOSITORY" --title "$RELEASE_NAME"
+            --notes "Experimental native Linux x86_64 build. Requires a legally obtained copy of the game; no game files are included.")
+          if [[ "$PRERELEASE" == true ]]; then args+=(--prerelease); fi
+          gh "${args[@]}"
