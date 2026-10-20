@@ -19,6 +19,7 @@
 #include <unistd.h>
 
 #include "../platform.h"
+#include "../paths.h"
 
 #ifndef MAP_FIXED_NOREPLACE
 #define MAP_FIXED_NOREPLACE 0x100000
