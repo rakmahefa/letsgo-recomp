@@ -57,7 +57,7 @@ jobs:
           .venv/bin/python -m pip install capstone unicorn lz4 pyinstaller
 
       - name: Build native Linux runtime
-        run: make -j2 build/lasrecomp
+        run: make -j2 DEPS=/usr/local build/lasrecomp
 
       - name: Build standalone game-code generator
         run: |
