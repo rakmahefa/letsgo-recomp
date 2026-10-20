@@ -17,6 +17,11 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+#endif
 
 #include "../hle.h"
 #include "../mods.h"
