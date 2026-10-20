@@ -264,7 +264,8 @@ jobs:
           LDAI_VERSION="$version" \
           LINUXDEPLOY_OUTPUT_APP_NAME=LetsGoRecomp \
           LINUXDEPLOY_OUTPUT_VERSION="$version" \
-          APPIMAGE_EXTRACT_AND_RUN=1 "$tool" \
+          # linuxdeploy's strip phase currently crashes on this ELF; preserve debug sections and let the AppImage build continue.
+          NO_STRIP=1 APPIMAGE_EXTRACT_AND_RUN=1 "$tool" \
             --appdir "$appdir" \
             --executable "$appdir/usr/bin/LetsGoRecomp" \
             --executable "$appdir/usr/bin/lasgen/lasgen" \
