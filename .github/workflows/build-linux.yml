@@ -50,6 +50,20 @@ jobs:
           test -x /usr/lib/llvm-21/bin/ld.lld
           echo "/usr/lib/llvm-21/bin" >> "$GITHUB_PATH"
 
+      - name: Install pinned Vulkan-Headers with VK_EXT_device_fault
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch v1.3.296 https://github.com/KhronosGroup/Vulkan-Headers.git /tmp/Vulkan-Headers
+          cmake -S /tmp/Vulkan-Headers -B /tmp/Vulkan-Headers/build \
+            -DVULKAN_HEADERS_ENABLE_TESTS=OFF \
+            -DVULKAN_HEADERS_ENABLE_INSTALL=ON \
+            -DCMAKE_INSTALL_PREFIX=/usr/local
+          sudo cmake --install /tmp/Vulkan-Headers/build
+          test -f /usr/local/include/vulkan/vulkan_core.h
+          grep -q 'PFN_vkGetDeviceFaultInfoEXT' /usr/local/include/vulkan/vulkan_core.h
+          mkdir -p build/licenses
+          install -m 644 /tmp/Vulkan-Headers/LICENSE.md build/licenses/Vulkan-Headers-LICENSE.md
+
       - name: Install pinned Vulkan Memory Allocator header
         run: |
           set -euo pipefail
@@ -165,6 +179,7 @@ jobs:
           install -m 644 build/licenses/FFmpeg-LGPL-2.1.txt "$appdir/usr/share/licenses/LetsGoRecomp/"
           install -m 644 build/licenses/SDL-LICENSE.txt "$appdir/usr/share/licenses/LetsGoRecomp/"
           install -m 644 build/licenses/VMA-LICENSE.txt "$appdir/usr/share/licenses/LetsGoRecomp/"
+          install -m 644 build/licenses/Vulkan-Headers-LICENSE.md "$appdir/usr/share/licenses/LetsGoRecomp/"
           install -m 644 build/licenses/shaderc-LICENSE.txt "$appdir/usr/share/licenses/LetsGoRecomp/"
           install -m 644 build/licenses/glslang-LICENSE.txt "$appdir/usr/share/licenses/LetsGoRecomp/"
           install -m 644 build/licenses/SPIRV-Tools-LICENSE.txt "$appdir/usr/share/licenses/LetsGoRecomp/"
