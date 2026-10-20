@@ -4,6 +4,12 @@
 #include "mods.h"
 
 #include <dirent.h>
+#ifdef _WIN32
+#include <direct.h>
+#define rmdir _rmdir
+#else
+#include <unistd.h>
+#endif
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
