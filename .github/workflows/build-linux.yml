@@ -37,7 +37,7 @@ jobs:
             libwayland-dev wayland-protocols libdecor-0-dev libegl1-mesa-dev \
             libasound2-dev libpulse-dev libpipewire-0.3-dev libdbus-1-dev \
             libibus-1.0-dev libudev-dev \
-            python3 python3-venv python3-pip patchelf zip unzip squashfs-tools desktop-file-utils
+            python3 python3-venv python3-pip patchelf zip unzip squashfs-tools desktop-file-utils imagemagick
 
       - name: Install Clang 21 toolchain
         run: |
@@ -49,6 +49,20 @@ jobs:
           clang-21 --version
           test -x /usr/lib/llvm-21/bin/ld.lld
           echo "/usr/lib/llvm-21/bin" >> "$GITHUB_PATH"
+
+      - name: Install pinned Vulkan-Headers with VK_EXT_device_fault
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch v1.3.296 https://github.com/KhronosGroup/Vulkan-Headers.git /tmp/Vulkan-Headers
+          cmake -S /tmp/Vulkan-Headers -B /tmp/Vulkan-Headers/build \
+            -DVULKAN_HEADERS_ENABLE_TESTS=OFF \
+            -DVULKAN_HEADERS_ENABLE_INSTALL=ON \
+            -DCMAKE_INSTALL_PREFIX=/usr/local
+          sudo cmake --install /tmp/Vulkan-Headers/build
+          test -f /usr/local/include/vulkan/vulkan_core.h
+          grep -q 'PFN_vkGetDeviceFaultInfoEXT' /usr/local/include/vulkan/vulkan_core.h
+          mkdir -p build/licenses
+          install -m 644 /tmp/Vulkan-Headers/LICENSE.md build/licenses/Vulkan-Headers-LICENSE.md
 
       - name: Install pinned Vulkan Memory Allocator header
         run: |
@@ -150,7 +164,7 @@ jobs:
           appdir="$GITHUB_WORKSPACE/build/dist/LetsGoRecomp"
           bindir="$appdir/usr/bin"
           mkdir -p "$bindir/gamelib-src" "$appdir/usr/share/applications" \
-            "$appdir/usr/share/icons/hicolor/1024x1024/apps" "$appdir/usr/share/licenses/LetsGoRecomp"
+            "$appdir/usr/share/icons/hicolor/512x512/apps" "$appdir/usr/share/licenses/LetsGoRecomp"
 
           install -m 755 build/lasrecomp "$bindir/LetsGoRecomp"
           cp -a build/helper/lasgen "$bindir/"
@@ -165,13 +179,15 @@ jobs:
           install -m 644 build/licenses/FFmpeg-LGPL-2.1.txt "$appdir/usr/share/licenses/LetsGoRecomp/"
           install -m 644 build/licenses/SDL-LICENSE.txt "$appdir/usr/share/licenses/LetsGoRecomp/"
           install -m 644 build/licenses/VMA-LICENSE.txt "$appdir/usr/share/licenses/LetsGoRecomp/"
+          install -m 644 build/licenses/Vulkan-Headers-LICENSE.md "$appdir/usr/share/licenses/LetsGoRecomp/"
           install -m 644 build/licenses/shaderc-LICENSE.txt "$appdir/usr/share/licenses/LetsGoRecomp/"
           install -m 644 build/licenses/glslang-LICENSE.txt "$appdir/usr/share/licenses/LetsGoRecomp/"
           install -m 644 build/licenses/SPIRV-Tools-LICENSE.txt "$appdir/usr/share/licenses/LetsGoRecomp/"
           install -m 644 build/licenses/SPIRV-Headers-LICENSE.txt "$appdir/usr/share/licenses/LetsGoRecomp/"
 
-          cp docs/icon/icon_1024.png "$appdir/lets-go-recomp.png"
-          cp docs/icon/icon_1024.png "$appdir/usr/share/icons/hicolor/1024x1024/apps/lets-go-recomp.png"
+          convert docs/icon/icon_1024.png -resize 512x512 "$appdir/lets-go-recomp.png"
+          test "$(identify -format '%wx%h' "$appdir/lets-go-recomp.png")" = "512x512"
+          cp "$appdir/lets-go-recomp.png" "$appdir/usr/share/icons/hicolor/512x512/apps/lets-go-recomp.png"
           ln -sfn lets-go-recomp.png "$appdir/.DirIcon"
 
           cat > "$appdir/lets-go-recomp.desktop" <<'EOF'
@@ -245,6 +261,8 @@ jobs:
           desktop-file-validate "$appdir/lets-go-recomp.desktop"
 
           cd "$GITHUB_WORKSPACE/build/dist"
+          # Keep the onedir lasgen helper and Zig binary in their nested directories.
+          # Passing either as --executable would flatten its basename into usr/bin and collide with those directories.
           LDAI_OUTPUT="$appimage" \
           LDAI_VERSION="$version" \
           LINUXDEPLOY_OUTPUT_APP_NAME=LetsGoRecomp \
@@ -252,8 +270,6 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN=1 "$tool" \
             --appdir "$appdir" \
             --executable "$appdir/usr/bin/LetsGoRecomp" \
-            --executable "$appdir/usr/bin/lasgen/lasgen" \
-            --executable "$appdir/usr/bin/zig/zig" \
             --desktop-file "$appdir/lets-go-recomp.desktop" \
             --icon-file "$appdir/lets-go-recomp.png" \
             --custom-apprun "$GITHUB_WORKSPACE/build/AppRun.linux" \
