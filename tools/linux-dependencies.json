@@ -70,8 +70,16 @@
       "name": "Linux generator Python environment",
       "requirements_file": "tools/requirements-linux-generator.txt",
       "versions_pinned": true,
+      "packages": [
+        {"name": "PyInstaller", "version": "6.22.3"},
+        {"name": "pyinstaller-hooks-contrib", "version": "2026.9"},
+        {"name": "setuptools", "version": "80.9.0"},
+        {"name": "Unicorn Engine", "version": "2.1.2"},
+        {"name": "Capstone", "version": "5.0.6"},
+        {"name": "lz4", "version": "4.4.4"}
+      ],
       "hashes_pinned": false,
-      "note": "Direct packages are exact-version pinned; transitive dependency hashes still need a generated hash lock."
+      "note": "The PyInstaller 6.22.3 / hooks-contrib 2026.9 pair includes the setuptools-vendored jaraco alias fixes required by the bundled pkg_resources import. Direct packages are exact-version pinned; transitive dependency hashes still need a generated hash lock."
     }
   ]
 }
