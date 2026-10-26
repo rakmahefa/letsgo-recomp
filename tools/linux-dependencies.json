@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "architecture": "x86_64",
+  "policy": {
+    "git_sources": "checked out by full immutable commit SHA in CI",
+    "binary_archives": "verified against SHA-256 before use",
+    "python_packages": "exact direct dependency versions; transitive dependency hashes are not yet locked"
+  },
+  "dependencies": [
+    {
+      "name": "Zig",
+      "version": "0.17.0",
+      "source": "https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz",
+      "sha256": "1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026",
+      "license": "MIT AND Apache-2.0 WITH LLVM-exception"
+    },
+    {
+      "name": "linuxdeploy",
+      "version": "1-alpha-20251107-1",
+      "source": "https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage",
+      "sha256": "c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d",
+      "upstream_commit": "cc7b86472c3caa3fd729b9dc502fd2aa78394257",
+      "license": "MIT"
+    },
+    {
+      "name": "FFmpeg",
+      "version": "6.1.6",
+      "source": "https://ffmpeg.org/releases/ffmpeg-6.1.6.tar.xz",
+      "sha256": "d4fcb164028dd3beee5d92c0ac72e46aac6973c75ea12dc14de07bf8f407370a",
+      "configure_policy": "shared-only, no programs, no network, no GPL, no nonfree",
+      "license": "LGPL-2.1-or-later"
+    },
+    {
+      "name": "Vulkan-Headers",
+      "version": "1.3.296",
+      "repository": "https://github.com/KhronosGroup/Vulkan-Headers.git",
+      "commit": "29f979ee5aa58b7b005f805ea8df7a855c39ff37",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "Vulkan Memory Allocator",
+      "version": "3.1.0",
+      "repository": "https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git",
+      "commit": "009ecd192c1289c7529bff248a16cfe896254816",
+      "license": "MIT"
+    },
+    {
+      "name": "shaderc",
+      "version": "2024.4",
+      "repository": "https://github.com/google/shaderc.git",
+      "commit": "caa54d9779d5605aca4e1a0c0c962a3d8f4aeb31",
+      "license": "Apache-2.0",
+      "transitive_source_pins": "shaderc DEPS file via git-sync-deps"
+    },
+    {
+      "name": "SDL3",
+      "version": "3.4.18",
+      "repository": "https://github.com/libsdl-org/SDL.git",
+      "commit": "829a65d769d935c4852f8159e964312c0957260a",
+      "license": "Zlib"
+    },
+    {
+      "name": "Clang/LLVM",
+      "version": "21.x",
+      "source": "https://apt.llvm.org/",
+      "pinning": "major-version apt package; exact clang version is recorded in BUILD-INFO.txt but apt package version is not yet content-pinned",
+      "license": "Apache-2.0 WITH LLVM-exception"
+    },
+    {
+      "name": "Linux generator Python environment",
+      "requirements_file": "tools/requirements-linux-generator.txt",
+      "versions_pinned": true,
+      "hashes_pinned": false,
+      "note": "Direct packages are exact-version pinned; transitive dependency hashes still need a generated hash lock."
+    }
+  ]
+}
