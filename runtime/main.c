@@ -7,6 +7,7 @@
 #include "gamelib.h"
 #include "gamesetup.h"
 #include "paths.h"
+#include "platform.h"
 #include "settings.h"
 #include "hle.h"
 #include "kernel.h"
@@ -162,7 +163,40 @@ static void boot(const char *root) {
     kernel_run_main(t, t->handle, 0, init_fn, fini_fn);  // nn::init::Start(thread_handle, args_region, init, fini)
 }
 
+static bool bundle_self_test(void) {
+    char generator[1200], compiler[1200], cpu_h[1200], entry_c[1200], hle[1200];
+    if (!rt_resource("lasgen/lasgen" PLAT_EXE_SUFFIX, NULL, generator, sizeof generator) ||
+        !rt_resource("zig/zig" PLAT_EXE_SUFFIX, NULL, compiler, sizeof compiler) ||
+        !rt_resource("gamelib-src/cpu.h", NULL, cpu_h, sizeof cpu_h) ||
+        !rt_resource("gamelib-src/gamelib_entry.c", NULL, entry_c, sizeof entry_c) ||
+        !rt_resource("gamelib-src/hle_symbols.txt", NULL, hle, sizeof hle)) {
+        fprintf(stderr, "[self-test] missing bundled generator, Zig compiler, or game-code headers\n");
+        return false;
+    }
+    const char *gen_argv[] = {generator, "--help", NULL};
+    PlatProc p = plat_spawn(gen_argv, NULL, false);
+    if (!p || plat_proc_wait(p, true) != 0) {
+        fprintf(stderr, "[self-test] bundled generator failed to start or show --help: %s\n", generator);
+        return false;
+    }
+    const char *zig_argv[] = {compiler, "version", NULL};
+    p = plat_spawn(zig_argv, NULL, false);
+    if (!p || plat_proc_wait(p, true) != 0) {
+        fprintf(stderr, "[self-test] bundled Zig failed to start: %s\n", compiler);
+        return false;
+    }
+    fprintf(stderr, "[self-test] bundle resources OK; lasgen=%s; zig=%s; no game files opened\n", generator, compiler);
+    return true;
+}
+
 int main(int argc, char **argv) {
+    // --version can be exercised in CI without SDL, Vulkan or creating a user data directory.
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--version")) {
+            printf("%s %s\n", RT_APP_NAME, RT_APP_VERSION);
+            return 0;
+        }
+    }
     // This read-only diagnostic must run before plat_init()/rt_paths_init(): it must not create
     // the XDG data root or rotate/create lasrecomp.log, and it never initializes a GPU.
     for (int i = 1; i < argc; i++) {
@@ -173,6 +207,8 @@ int main(int argc, char **argv) {
             return setup_dry_run(argv[i + 1], redact);
         }
     }
+    bool self_test = false;
+    for (int i = 1; i < argc; i++) self_test |= !strcmp(argv[i], "--self-test");
     plat_init();
 #ifdef _WIN32
     setvbuf(stderr, NULL, _IONBF, 0);  // the Windows CRT treats _IOLBF as full buffering
@@ -188,6 +224,7 @@ int main(int argc, char **argv) {
         else if (argv[i][0] != '-') root = arg_root;
     }
     rt_paths_init();  // the data root becomes the working directory (runtime/paths.h)
+    if (self_test) return bundle_self_test() ? 0 : 1;
     for (bool title = !skip_launcher;;) {
         if (title) {  // start screen: resolution, fullscreen, anti-aliasing, translation, keys (runtime/ui/launcher_lg.mm)
             extern void launcher_lg_run(const char *root);
