@@ -14,6 +14,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#ifdef __linux__
+#include <limits.h>
+#endif
 
 #include "gamebuild.h"
 #include "gamelib.h"
@@ -210,21 +213,103 @@ static void build_progress(double f, const char *step) {
                                                                                            : SETUP_COMPILING;
 }
 
+#ifdef __linux__
+static int effective_cpu_count(int host_cores) {
+    int result = host_cores > 0 ? host_cores : 1;
+    // cgroup v2 CPU quota: cpu.max contains "quota period" or "max period".
+    FILE *f = fopen("/sys/fs/cgroup/cpu.max", "r");
+    if (f) {
+        char quota_text[64] = "";
+        unsigned long long period = 0, quota = 0;
+        if (fscanf(f, "%63s %llu", quota_text, &period) == 2 && period && strcmp(quota_text, "max")) {
+            char *end = NULL;
+            quota = strtoull(quota_text, &end, 10);
+            if (end && !*end && quota) {
+                unsigned long long count = quota / period;
+                if (!count) count = 1;
+                if (count < (unsigned long long)result) result = (int)count;
+            }
+        }
+        fclose(f);
+    }
+    // cgroup v2 effective cpuset (for example "0-3,8"). Count only when the file parses.
+    f = fopen("/sys/fs/cgroup/cpuset.cpus.effective", "r");
+    if (f) {
+        char text[4096] = "";
+        if (fgets(text, sizeof text, f)) {
+            int count = 0, valid = 1;
+            char *p = text;
+            while (*p && *p != '\n' && valid) {
+                char *end = NULL;
+                long first = strtol(p, &end, 10);
+                if (end == p || first < 0) { valid = 0; break; }
+                long last = first;
+                p = end;
+                if (*p == '-') {
+                    p++;
+                    last = strtol(p, &end, 10);
+                    if (end == p || last < first) { valid = 0; break; }
+                    p = end;
+                }
+                if (last - first > 4096 || count > INT_MAX - (int)(last - first + 1)) { valid = 0; break; }
+                count += (int)(last - first + 1);
+                if (*p == ',') p++;
+                else if (*p && *p != '\n') valid = 0;
+            }
+            if (valid && count > 0 && count < result) result = count;
+        }
+        fclose(f);
+    }
+    return result > 0 ? result : 1;
+}
+
+static int effective_ram_mib(int host_ram_mib) {
+    int result = host_ram_mib;
+    FILE *f = fopen("/sys/fs/cgroup/memory.max", "r");
+    if (f) {
+        char text[64] = "";
+        if (fgets(text, sizeof text, f) && strcmp(text, "max\n") && strcmp(text, "max")) {
+            char *end = NULL;
+            unsigned long long bytes = strtoull(text, &end, 10);
+            if (end != text && bytes > 0) {
+                unsigned long long mib = bytes / (1024ull * 1024ull);
+                if (mib > 0 && (!result || mib < (unsigned long long)result)) result = (int)(mib > INT_MAX ? INT_MAX : mib);
+            }
+        }
+        fclose(f);
+    }
+    return result > 0 ? result : host_ram_mib;
+}
+#endif
+
 static bool build_code(void) {
     if (!gamebuild_available()) { g_state = SETUP_FAIL_TOOLS; return false; }
-    int cores = SDL_GetNumLogicalCPUCores();
-    int ram_mib = SDL_GetSystemRAM();
-    if (cores < 1) cores = 1;
+    int host_cores = SDL_GetNumLogicalCPUCores();
+    int host_ram_mib = SDL_GetSystemRAM();
+    if (host_cores < 1) host_cores = 1;
+    int cores = host_cores, ram_mib = host_ram_mib;
+#ifdef __linux__
+    cores = effective_cpu_count(host_cores);
+    ram_mib = effective_ram_mib(host_ram_mib);
+#endif
     int ram_gb = ram_mib > 0 ? ram_mib / 1024 : 0;
-    // "jobs" is a global child-process budget shared by lasgen and zig cc, not a
-    // compiler-only count. Linux cgroup constraints will further cap this budget.
+    // The budget includes generator and compiler children. Use a conservative cap and allow
+    // LARECOMP_BUILD_JOBS to reduce it further (never exceed detected capacity).
     int capacity = cores;
     if (ram_gb > 2 && ram_gb - 2 < capacity) capacity = ram_gb - 2;
     else if (ram_gb > 0 && ram_gb <= 2) capacity = 1;
     if (capacity > 16) capacity = 16;
     if (capacity < 1) capacity = 1;
-    GameBuildOpts o = {.progress = build_progress, .jobs = capacity, .cpu_cores = cores, .ram_mib = ram_mib};
-    LOG("[setup] resources: logical_cpu=%d system_ram_mib=%d global_child_budget=%d\n", cores, ram_mib, capacity);
+    const char *jobs_env = getenv("LARECOMP_BUILD_JOBS");
+    if (jobs_env && *jobs_env) {
+        char *end = NULL;
+        long requested = strtol(jobs_env, &end, 10);
+        if (end != jobs_env && !*end && requested > 0 && requested < capacity) capacity = (int)requested;
+    }
+    GameBuildOpts o = {.progress = build_progress, .jobs = capacity, .cpu_cores = cores, .ram_mib = ram_mib,
+                       .host_cores = host_cores, .host_ram_mib = host_ram_mib};
+    LOG("[setup] resources: host_logical_cpu=%d host_ram_mib=%d effective_cpu=%d effective_ram_mib=%d "
+        "global_child_budget=%d\n", host_cores, host_ram_mib, cores, ram_mib, capacity);
     char why[256] = "";
     g_state = SETUP_READING;
     if (!gamebuild_run(ROOT, &o, why, sizeof why)) {
