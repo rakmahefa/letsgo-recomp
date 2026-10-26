@@ -214,6 +214,17 @@ static void game_files_section(SDL_Window *win) {
         return;
     }
     bool ready = setup_ready();
+    if (st == SETUP_DRY_RUN_DONE) {
+        ImGui::TextColored(UI_GREEN_TEXT, "%s",
+            T("DRY RUN passed — source validated; no files were changed and the game is not ready to launch.",
+              "DRY RUN aprovado — origem validada; nenhum arquivo foi alterado e o jogo ainda não está pronto para iniciar."));
+        ImGui::TextDisabled("%s",
+            T("Unset LARECOMP_SETUP_DRY_RUN=1 to run the real setup.",
+              "Remova LARECOMP_SETUP_DRY_RUN=1 para executar a preparação real."));
+        if (ui_button(T("Select game folder...", "Selecionar pasta do jogo..."), -1))
+            SDL_ShowOpenFolderDialog(picked_game, NULL, win, NULL, false);
+        return;
+    }
     if (ready) {
         const char *name = game_name("extracted/exefs");
         ImGui::TextColored(k_green, g_pt ? "Pokémon: Let's Go, %s! - pronto para jogar" : "Pokémon: Let's Go, %s! - ready to play",
