@@ -53,7 +53,11 @@ jobs:
       - name: Install pinned Vulkan-Headers with VK_EXT_device_fault
         run: |
           set -euo pipefail
-          git clone --depth 1 --branch v1.3.296 https://github.com/KhronosGroup/Vulkan-Headers.git /tmp/Vulkan-Headers
+          git init /tmp/Vulkan-Headers
+          git -C /tmp/Vulkan-Headers remote add origin https://github.com/KhronosGroup/Vulkan-Headers.git
+          git -C /tmp/Vulkan-Headers fetch --depth 1 origin 29f979ee5aa58b7b005f805ea8df7a855c39ff37
+          git -C /tmp/Vulkan-Headers checkout --detach FETCH_HEAD
+          test "$(git -C /tmp/Vulkan-Headers rev-parse HEAD)" = "29f979ee5aa58b7b005f805ea8df7a855c39ff37"
           cmake -S /tmp/Vulkan-Headers -B /tmp/Vulkan-Headers/build \
             -DVULKAN_HEADERS_ENABLE_TESTS=OFF \
             -DVULKAN_HEADERS_ENABLE_INSTALL=ON \
@@ -68,12 +72,13 @@ jobs:
         run: |
           set -euo pipefail
           sudo install -d /usr/local/include
-          curl -fsSL --retry 3 \
-            https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator/v3.1.0/include/vk_mem_alloc.h \
-            -o /tmp/vk_mem_alloc.h
-          curl -fsSL --retry 3 \
-            https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator/v3.1.0/LICENSE.txt \
-            -o build-vma-license.txt
+          git init /tmp/VulkanMemoryAllocator
+          git -C /tmp/VulkanMemoryAllocator remote add origin https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+          git -C /tmp/VulkanMemoryAllocator fetch --depth 1 origin 009ecd192c1289c7529bff248a16cfe896254816
+          git -C /tmp/VulkanMemoryAllocator checkout --detach FETCH_HEAD
+          test "$(git -C /tmp/VulkanMemoryAllocator rev-parse HEAD)" = "009ecd192c1289c7529bff248a16cfe896254816"
+          install -m 644 /tmp/VulkanMemoryAllocator/include/vk_mem_alloc.h /tmp/vk_mem_alloc.h
+          install -m 644 /tmp/VulkanMemoryAllocator/LICENSE.txt build-vma-license.txt
           sudo install -m 644 /tmp/vk_mem_alloc.h /usr/local/include/vk_mem_alloc.h
           mkdir -p build/licenses
           install -m 644 build-vma-license.txt build/licenses/VMA-LICENSE.txt
@@ -82,6 +87,7 @@ jobs:
         run: |
           set -euo pipefail
           curl -fsSL --retry 3 https://ffmpeg.org/releases/ffmpeg-6.1.6.tar.xz -o /tmp/ffmpeg-6.1.6.tar.xz
+          echo "d4fcb164028dd3beee5d92c0ac72e46aac6973c75ea12dc14de07bf8f407370a  /tmp/ffmpeg-6.1.6.tar.xz" | sha256sum --check --strict
           tar -C /tmp -xf /tmp/ffmpeg-6.1.6.tar.xz
           cd /tmp/ffmpeg-6.1.6
           ./configure \
@@ -107,7 +113,11 @@ jobs:
       - name: Build pinned shaderc combined library
         run: |
           set -euo pipefail
-          git clone --depth 1 --branch v2024.4 https://github.com/google/shaderc.git /tmp/shaderc
+          git init /tmp/shaderc
+          git -C /tmp/shaderc remote add origin https://github.com/google/shaderc.git
+          git -C /tmp/shaderc fetch --depth 1 origin caa54d9779d5605aca4e1a0c0c962a3d8f4aeb31
+          git -C /tmp/shaderc checkout --detach FETCH_HEAD
+          test "$(git -C /tmp/shaderc rev-parse HEAD)" = "caa54d9779d5605aca4e1a0c0c962a3d8f4aeb31"
           cd /tmp/shaderc
           ./utils/git-sync-deps
           cmake -S /tmp/shaderc -B /tmp/shaderc/build -G Ninja \
@@ -126,7 +136,11 @@ jobs:
       - name: Build SDL3 from source
         run: |
           set -euo pipefail
-          git clone --depth 1 --branch release-3.4.18 https://github.com/libsdl-org/SDL.git /tmp/SDL
+          git init /tmp/SDL
+          git -C /tmp/SDL remote add origin https://github.com/libsdl-org/SDL.git
+          git -C /tmp/SDL fetch --depth 1 origin 829a65d769d935c4852f8159e964312c0957260a
+          git -C /tmp/SDL checkout --detach FETCH_HEAD
+          test "$(git -C /tmp/SDL rev-parse HEAD)" = "829a65d769d935c4852f8159e964312c0957260a"
           cmake -S /tmp/SDL -B /tmp/SDL/build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local \
             -DCMAKE_INSTALL_LIBDIR=lib \
@@ -274,6 +288,7 @@ jobs:
           curl -fsSL --retry 3 \
             https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage \
             -o "$tool"
+          echo "c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d  $tool" | sha256sum --check --strict
           chmod 755 "$tool"
           desktop-file-validate "$appdir/lets-go-recomp.desktop"
 
