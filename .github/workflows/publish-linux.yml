@@ -135,6 +135,7 @@ jobs:
             "${appimages[0]}" "${appimage_checksums[0]}"
             artifact/BUILD-INFO.txt
             artifact/DEPENDENCIES.json
+            artifact/build-size-report.txt
             artifact/build-manifest.json
             artifact/build-manifest-release.json
             artifact/sbom.cdx.json
