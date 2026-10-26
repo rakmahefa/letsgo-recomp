@@ -12,7 +12,9 @@ extern "C" {
 typedef struct {
     // now and then, from the calling thread: how far the whole build is (0..1) and what it's doing
     void (*progress)(double fraction, const char *step);
-    int jobs;  // compiler processes at once (>= 1)
+    int jobs;  // global child-process budget shared by generator and compiler (>= 1)
+    int cpu_cores; // detected logical CPUs before cgroup caps
+    int ram_mib;   // detected total RAM in MiB before cgroup caps
 } GameBuildOpts;
 
 // Builds it (a few minutes). false: why says what went wrong (details in the log).
