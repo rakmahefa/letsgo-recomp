@@ -24,9 +24,12 @@ a = Analysis(
     binaries=collect_dynamic_libs('capstone') + collect_dynamic_libs('unicorn')
              + [(p, 'unicorn/lib') for p in _uc_versioned],
     datas=[],
-    hiddenimports=collect_submodules('unicorn'),  # (it imports its arch modules by name at run time)
+    # Unicorn 2.1.2 resolves its bundled libunicorn through pkg_resources at import time.
+    # Keep pkg_resources and its dynamic submodules in the frozen app; excluding it makes the
+    # native runtime compile successfully but crashes the packaged helper before --help.
+    hiddenimports=collect_submodules('unicorn') + collect_submodules('pkg_resources'),
     excludes=['tkinter', 'pydoc', 'doctest', 'unittest', 'pdb', 'IPython', 'numpy', 'setuptools', '_distutils_hack',
-              'pkg_resources', 'ssl', '_ssl', '_hashlib', '_multibytecodec', '_codecs_cn', '_codecs_hk',
+              'ssl', '_ssl', '_hashlib', '_multibytecodec', '_codecs_cn', '_codecs_hk',
               '_codecs_iso2022', '_codecs_jp', '_codecs_kr', '_codecs_tw', '_decimal'],
     noarchive=False,
 )
