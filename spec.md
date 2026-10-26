@@ -250,12 +250,51 @@ La chaîne de setup a été suivie dans runtime/ui/launcher_lg.mm, runtime/games
 | Recherche après sélection | find_game() parcourt récursivement les dossiers jusqu'à la profondeur 5, dans l'ordre de readdir(). Il identifie romfs/ via bin/message, mais si exefs n'a pas encore été trouvé, il continue à parcourir les sous-dossiers du RomFS, sauf le dossier nommé bin. | Cause évitable confirmée par lecture du code. Un grand RomFS peut être scanné inutilement avant que le dossier ExeFS soit trouvé. |
 | Copie d'ExeFS / image existante | romfs_copy_tree() tente de créer des hard links ; en cas d'échec (par exemple systèmes de fichiers différents), il copie les fichiers avec des E/S classiques. Pour un romfs.bin existant, le fast path est le hard link ; le fallback copie tous les octets avec un buffer de 1 Mio. | Le temps dépend du type d'entrée et du fait que la source et la destination partagent le même système de fichiers. |
 | Construction depuis romfs/ | romfs_build() scanne l'arbre, fait un stat() sur les entrées, construit les tables et trie les fichiers/répertoires, puis lit et réécrit séquentiellement toutes les données dans romfs.bin avec un buffer de 4 Mio. | Cette écriture complète est attendue avec le format actuel, mais elle peut être limitée par les métadonnées, la lecture de petits fichiers ou les E/S du volume. Aucun temps de scan séparé n'est exposé. |
-| Génération et compilation du code du jeu | gamebuild_run() démarre quatre générateurs (main, sdk, subsdk0, subsdk1) en parallèle et compile les blocs C générés au fur et à mesure, jusqu'au nombre de jobs disponible. Au démarrage, il supprime .gamebuild et la bibliothèque de jeu existante : il n'y a donc pas de cache d'objets conservé entre les builds. | Suspect sérieux pour la plus grande part du premier setup. Le README annonce environ 22 minutes pour la recompilation unique sur un CPU à 20 threads ; docs/DIAGNOSTICO.md décrit environ 550 Mo de C généré. Ces valeurs sont un repère du dépôt, pas une mesure sur la machine concernée. |
+| Génération et compilation du code du jeu | L'AppImage est câblée pour lancer le générateur livré dans `usr/bin/lasgen/lasgen` et Zig dans `usr/bin/zig/zig`. `gamebuild_run()` lance quatre processus `lasgen` (main, sdk, subsdk0, subsdk1) puis compile en parallèle les chunks C via plusieurs processus `zig cc`. `tools/gen.py` ne contient pas de pool de threads interne : chaque processus traite son module de manière essentiellement séquentielle. | Le parallélisme existe, mais le budget `jobs` ne compte que les compilateurs : jusqu'à quatre générateurs supplémentaires s'exécutent en même temps. Risque de concurrence CPU/RAM excessive à mesurer. Pas de cache d'objets conservé entre les builds. Le README indique environ 22 minutes sur une machine à 20 threads ; c'est un repère, pas un benchmark de la machine concernée. |
 | Barre de progression | gamesetup.c attribue 15 % à la copie/image et 85 % au code du jeu. La recherche des fichiers et le scan initial RomFS n'émettent pas un progrès en octets. | Le launcher peut paraître figé pendant une recherche/scan long, et les pourcentages ne représentent pas nécessairement le temps restant. |
 
 **Conclusion de l'investigation :** il est justifié de donner à ce sujet une priorité P1. La première correction ciblée est de supprimer la descente dans l'arbre d'un RomFS déjà reconnu pendant la recherche d'ExeFS. En parallèle, il faut mesurer séparément le scan, la création de romfs.bin et le générateur/compilateur, puis ne faire les optimisations I/O ou de compilation qu'en fonction des résultats. Il ne faut pas annoncer un gain chiffré avant un benchmark comparable.
 
-### 8.2 Ajouter une instrumentation de performance avant d'optimiser
+### 8.2 Vérification du parallélisme et du générateur livré dans l'AppImage
+
+**Verdict de revue statique : oui, le chemin normal de l'AppImage utilise plusieurs processus de travail en parallèle.** Ce n'est pas simplement une barre de progression sur un seul thread. En revanche, le générateur Python n'a pas son propre pool de threads : le parallélisme vient surtout de plusieurs processus `lasgen` et des invocations `zig cc`.
+
+#### Chemin exact d'exécution
+
+1. `runtime/gamesetup.c:setup_start()` crée un thread pthread détaché pour le setup afin de ne pas bloquer la boucle UI. Ce thread effectue la recherche, la copie et la préparation RomFS, puis appelle `build_code()`.
+2. `build_code()` calcule le nombre de jobs à partir de `SDL_GetNumLogicalCPUCores()` et `SDL_GetSystemRAM()`.
+3. En mode AppImage normal, `runtime/gamebuild.c:find_tools()` recherche le générateur à côté du runtime sous `usr/bin/lasgen/lasgen` et Zig sous `usr/bin/zig/zig`. Le workflow Linux construit le générateur avec PyInstaller en mode **onedir**, puis copie les répertoires `lasgen/` et `zig/` dans l'AppDir. Python ou Clang système n'est donc pas requis pour ce chemin normal. `LARECOMP_GEN` et `LARECOMP_CC` peuvent toutefois remplacer ces outils si l'utilisateur les définit.
+4. `gamebuild_run()` lance quatre processus générateur via `plat_spawn()` ; sur Linux, `runtime/platform/linux.c` utilise `posix_spawn()`. Les quatre modules sont traités simultanément : `main`, `sdk`, `subsdk0` et `subsdk1`.
+5. `tools/gen.py` lit chaque NSO, décompresse son image, découvre les frontières de fonctions, parcourt les instructions, résout les cibles de branches/jump tables, puis écrit le C en chunks. Le code de génération utilise `unicorn` et `capstone`, mais ne crée pas de pool de threads ou de processus à lui seul : un processus `lasgen` traite un module.
+6. À mesure que chaque chunk C devient disponible, `gamebuild_run()` lance des processus de compilation indépendants `zig cc -c` jusqu'à remplir les créneaux de compilation autorisés. La génération et la compilation se chevauchent. L'édition de liens finale est une seule tâche.
+
+Le packaging du générateur est cohérent avec ce chemin : `tools/lasgen.spec` inclut les imports Python du générateur, collecte les bibliothèques natives de Capstone/Unicorn et ajoute explicitement la bibliothèque Unicorn versionnée. Le workflow Linux vérifie actuellement que `build/helper/lasgen/lasgen` existe et est exécutable, mais ce test ne suffit pas à prouver que l'exécutable démarre et charge toutes ses bibliothèques natives ; il n'y a pas encore de test de traduction réelle dans la CI.
+
+#### Limite actuelle du budget de parallélisme — risque concret à vérifier
+
+Le code fait l'équivalent de :
+
+`ram_gb = SDL_GetSystemRAM() / 1024`
+
+`jobs = max(1, min(logical_cores, ram_gb - 2))`
+
+SDL documente que `SDL_GetSystemRAM()` renvoie la RAM totale configurée en MiB, et que `SDL_GetNumLogicalCPUCores()` renvoie le nombre de processeurs logiques ([RAM](https://wiki.libsdl.org/SDL3/SDL_GetSystemRAM), [CPU](https://wiki.libsdl.org/SDL3/SDL_GetNumLogicalCPUCores)). `gamebuild_run()` plafonne ensuite `jobs` à 64, mais ce nombre désigne **uniquement les processus de compilation**.
+
+Comme les quatre générateurs sont démarrés indépendamment et ne sont pas déduits du budget `jobs`, la charge peut atteindre approximativement `4 générateurs + jobs compilateurs` processus enfants actifs, sans compter le runtime et le linker ponctuel. Exemple : sur une machine signalant 12 CPU logiques et 16 GiB de RAM, la formule autorise 12 compilateurs ; les quatre générateurs peuvent s'ajouter pendant la phase de chevauchement. Ce n'est pas une preuve de lenteur ou de panne, mais c'est un risque de surabonnement CPU/RAM.
+
+Autre limite : la RAM totale et le nombre de CPU logiques ne représentent pas forcément la mémoire libre ni les quotas CPU/mémoire d'un conteneur/cgroup. Le calcul réserve 2 GiB de manière fixe, sans mesurer le pic mémoire actuel des processus. Or chaque générateur garde son propre état Python et manipule plusieurs représentations en mémoire du module (NSO/image décompressée, bytes de texte, tuple de mots, structures de découverte). Le pic RSS des quatre générateurs est donc à mesurer, pas à inférer à partir de la taille compressée des fichiers.
+
+#### Corrections demandées
+
+- Ajouter dans `lasrecomp.log` un résumé indiquant le chemin réellement choisi pour `lasgen` et Zig, le nombre de CPU logiques, la RAM totale détectée, la limite mémoire/CPU effective si disponible, le nombre de jobs compilateur et le nombre de générateurs actifs.
+- Définir un **budget global de travail**, tenant compte des générateurs ET des compilateurs, plutôt que de limiter les seuls compilateurs. Mesurer d'abord le temps total, le débit par phase et le pic RSS ; ensuite comparer plusieurs budgets sur la même machine et les mêmes fichiers.
+- Respecter les quotas cgroup/v2 et cpuset si l'application est utilisée dans un environnement restreint ; prévoir un réglage utilisateur explicite de jobs borné par la capacité détectée, avec une valeur par défaut prudente.
+- Tester si lancer les quatre générateurs simultanément est optimal sur les machines à faible RAM. Possibilité à benchmarker : limiter le nombre de générateurs actifs et conserver le chevauchement génération/compilation.
+- Vérifier le mode PyInstaller emballé par smoke test : démarrage du helper et `--help`, chargement des dépendances natives, puis un test de traduction sur un **NSO synthétique de test** si un fixture minimal fiable est disponible. Ne jamais introduire les fichiers du jeu de l'utilisateur dans la CI.
+- Dans le log permanent, conserver un résumé concis par module avec durée et nombre de fonctions/chunks. Les logs détaillés actuels sont écrits dans `extracted/.gamebuild/gen_*.log` et le répertoire temporaire est supprimé après le build ; sans recopier leurs résumés dans `lasrecomp.log`, les données détaillées disparaissent.
+- Ne pas considérer `lasgen --help` seul comme preuve qu'une traduction complète fonctionne : il ne valide que le démarrage de l'exécutable, tandis que le fixture doit valider le chargement de Unicorn/Capstone et le chemin de génération.
+
+### 8.3 Ajouter une instrumentation de performance avant d'optimiser
 
 Ajouter des mesures monotones dans runtime/gamesetup.c, runtime/romfs_build.c et runtime/gamebuild.c. N'émettre qu'un résumé par phase, pas une ligne par fichier.
 
@@ -272,7 +311,7 @@ Utiliser la même horloge monotone que plat_now_ns(). Ne pas lire tous les octet
 
 Établir une baseline avec la même version, les mêmes fichiers et la même machine : exécution froide puis répétée, SSD/HDD si cela reflète les environnements visés, source sur le même volume et source sur un volume différent. Publier le temps de chaque phase et le temps total ; c'est le critère de décision, pas la seule barre de progression.
 
-### 8.3 Introduire un setup dry-run non destructif
+### 8.4 Introduire un setup dry-run non destructif
 
 Prévoir un mode de diagnostic activable par un flag développeur (par exemple LARECOMP_SETUP_DRY_RUN=1 ou une commande --setup-dry-run <dossier>) qui suit la découverte et la validation de la source mais ne modifie rien.
 
@@ -294,7 +333,7 @@ Tests nécessaires avec de petits fixtures synthétiques, sans inclure de donné
 
 Avant/après le dry-run, vérifier que la liste et les SHA-256 des fichiers d'un répertoire temporaire n'ont pas changé, qu'aucune sortie extracted/ n'a été remplacée et qu'aucun processus lasgen/zig/compilateur n'a été lancé. Le mode --stats est optionnel, car son scan de comptage peut lui-même prendre du temps.
 
-### 8.4 Corrections à réaliser dans l'ordre des mesures
+### 8.5 Corrections à réaliser dans l'ordre des mesures
 
 **Correction 1 — réduire la recherche récursive (première correction ciblée).**
 
@@ -316,10 +355,13 @@ Mesurer génération et compilation séparément. Le premier build doit toujours
 
 Avant une copie susceptible de transférer plusieurs gigaoctets, vérifier l'espace disponible, identifier le type de source et avertir si une image complète va être copiée/construite. Le message doit expliquer la raison et éviter de donner l'impression que l'application est bloquée. Ne pas changer la politique de stockage de l'utilisateur ou conserver une référence externe silencieusement : toute solution sans copie exigerait une décision d'architecture et un traitement des chemins/symlinks distinct.
 
-### 8.5 Critères d'acceptation et priorité
+### 8.6 Critères d'acceptation et priorité
 
 - [ ] Une exécution dry-run ne supprime, ne copie et ne crée aucun fichier et ne lance aucun processus de génération/compilation.
 - [ ] Les timings établissent le pourcentage réel du temps passé dans la recherche, la préparation RomFS, la génération et la compilation.
+- [ ] Le log de la build réelle confirme les chemins AppImage du générateur et de Zig, la valeur effective de `jobs`, le nombre de générateurs actifs et la capacité CPU/RAM détectée.
+- [ ] Le planificateur traite ensemble les quatre générateurs et les processus `zig cc` ; le pic RSS ne dépasse pas la limite de test définie et le temps est comparé à la version actuelle.
+- [ ] La CI exécute le générateur PyInstaller emballé (pas seulement `test -x`) et teste au minimum son démarrage/dépendances natives ; un fixture NSO synthétique valide la génération si disponible.
 - [ ] Les logs différencient une image RomFS construite, une image existante hard-linkée et une copie complète cross-device.
 - [ ] Le détecteur ne descend plus dans les ressources d'un RomFS reconnu pour rechercher ExeFS ; les dumps imbriqués et plats restent reconnus.
 - [ ] La barre de progression indique la phase effective et continue d'évoluer pendant les phases lentes.
@@ -394,6 +436,10 @@ Ne pas retirer arbitrairement `lib/std`, les headers glibc/musl requis, les sour
 - [ ] Ajouter les tests dry-run automatisés avec mocks et un test manuel workflow_dispatch sur des artefacts réels.
 - [ ] Ajouter le mode setup dry-run et confirmer qu'aucun fichier ni processus de build n'est affecté.
 - [ ] Collecter un baseline des temps de recherche, copie/scan/image RomFS, génération par module, compilation et linkage.
+- [ ] Confirmer dans le log permanent que l'AppImage sélectionne `usr/bin/lasgen/lasgen` et `usr/bin/zig/zig` et enregistrer le nombre effectif de jobs.
+- [ ] Instrumenter le pic RSS et le nombre de processus simultanés ; vérifier le surabonnement causé par `4 générateurs + jobs compilateurs`.
+- [ ] Ajouter un smoke test de `lasgen` empaqueté et, si possible, une fixture NSO synthétique pour couvrir réellement la génération.
+- [ ] Définir après mesure un budget de parallélisme global qui réserve des créneaux aux générateurs comme aux compilateurs.
 - [ ] Corriger find_game() pour ne pas explorer le contenu d'un RomFS déjà reconnu.
 
 ### Étape 1 — sécuriser la release
