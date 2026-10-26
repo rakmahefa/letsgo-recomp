@@ -78,6 +78,18 @@ class WorkflowRunPolicyTests(unittest.TestCase):
             validate_run(run, REPOSITORY)
 
 
+class WorkflowDryRunTests(unittest.TestCase):
+    def test_release_workflow_is_read_only_until_explicit_publish(self) -> None:
+        workflow_path = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "publish-linux.yml"
+        workflow = workflow_path.read_text(encoding="utf-8")
+        self.assertIn("default: true", workflow[workflow.index("      dry_run:"):workflow.index("jobs:")])
+        self.assertIn("inputs.dry_run == false", workflow)
+        self.assertNotIn("gh release create", workflow.split("  preflight:", 1)[1].split("  publish:", 1)[0])
+        publish_job = workflow.split("  publish:", 1)[1]
+        self.assertIn("contents: write", publish_job)
+        self.assertIn("gh \"\u0024{args[@]}\"", publish_job)
+
+
 class ArtifactPolicyTests(unittest.TestCase):
     def valid_args(self) -> dict[str, str]:
         return {
