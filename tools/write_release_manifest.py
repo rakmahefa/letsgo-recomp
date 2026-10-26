@@ -34,6 +34,11 @@ def main() -> int:
         if not path.is_file():
             p.error(f"missing release evidence: {path}")
     embedded = json.loads(args.manifest.read_text(encoding="utf-8"))
+    dependency_doc = json.loads(args.dependencies.read_text(encoding="utf-8"))
+    if sha256(args.dependencies) != embedded.get("dependency_lock_sha256"):
+        p.error("dependency lock SHA-256 does not match the embedded build manifest")
+    if dependency_doc.get("dependencies") != embedded.get("dependencies"):
+        p.error("dependency lock contents do not match the embedded build manifest")
     report = {
         "schema": 1,
         "created_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
