@@ -1,0 +1,11 @@
+# Linux game-code generator build environment. Keep all build-time Python dependencies exact.
+# For a fully content-hashed lock, refresh artifact hashes together with version updates.
+pip==25.2
+setuptools==80.9.0
+altgraph==0.17.4
+packaging==25.0
+pyinstaller-hooks-contrib==2025.10
+pyinstaller==6.16.0
+capstone==5.0.6
+unicorn==2.1.2
+lz4==4.4.4
