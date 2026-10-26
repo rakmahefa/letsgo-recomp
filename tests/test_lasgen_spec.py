@@ -20,6 +20,11 @@ class LasgenSpecTests(unittest.TestCase):
             r"""['"]pkg_resources['"]""",
             "pkg_resources is required by Unicorn's libunicorn loader and must not be excluded",
         )
+        self.assertNotRegex(
+            excludes.group(1),
+            r"""['"]setuptools['"]""",
+            "setuptools._vendor.jaraco.text is used by pkg_resources and must remain available for PyInstaller's alias hook",
+        )
         self.assertIn(
             "collect_submodules('pkg_resources')",
             spec,
