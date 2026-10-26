@@ -167,7 +167,9 @@ typedef struct {
     const char *name;
     char log[1100], out[1100];
     PlatProc p;
-    int exit;                // -1 while running
+    int exit;                // -2 pending, -1 while running, >= 0 exited
+    bool started;
+    uint64_t start_ns, elapsed_ns;
     int files;               // chunk files written so far (complete)
     unsigned long long ci, n;  // functions written / all
 } Gen;
@@ -272,6 +274,34 @@ static PlatProc start_compile(const Tools *t, const Unit *u) {
     return p;
 }
 
+static bool start_generator(Gen *g, const Tools *t, const char *game_dir, const char *work,
+                            const char *base, char *why, size_t why_size) {
+    g->started = true;
+    g->exit = -1;
+    g->start_ns = plat_now_ns();
+    snprintf(g->log, sizeof g->log, "%s" SEP "gen_%s.log", work, g->name);
+    snprintf(g->out, sizeof g->out, "%s" SEP "%s", work, g->name);
+    char nso[1100];
+    snprintf(nso, sizeof nso, "%s" SEP "exefs" SEP "%s", game_dir, g->name);
+    Args a = {0};
+    add(&a, t->gen);
+    if (t->gen_script[0]) add(&a, t->gen_script);
+    add(&a, g->name);
+    add(&a, nso);
+    add(&a, base);
+    add(&a, g->out);
+    if (!strcmp(g->name, "sdk")) { add(&a, "--hle"); add(&a, t->hle); }
+    g->p = spawn(a.v, g->log);
+    args_free(&a);
+    if (!g->p) {
+        g->exit = 255;
+        snprintf(why, why_size, "the game code builder didn't start");
+        return false;
+    }
+    LOG("[gamebuild] generator_started module=%s path=%s\n", g->name, t->gen);
+    return true;
+}
+
 // ------------------------------------------------------------------ the build
 bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size_t why_size) {
     uint64_t t0 = plat_now_ns();
@@ -301,58 +331,54 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
         setenv("ZIG_LOCAL_CACHE_DIR", zc, 1);
 #endif
     }
-    LOG("[gamebuild] generator %s%s%s, compiler %s%s, %d jobs, CPU level %s\n", t.gen, t.gen_script[0] ? " " : "",
-        t.gen_script, t.cc, t.zig ? " cc" : "", o->jobs, gamelib_cpu_level());
-
-    // 1. the generator, every module at once; their finished files are compiled while it goes on (bases: rt.h)
+    // One budget counts every direct child: generators plus Zig compiler processes.
     enum { NGEN = 4 };
-    Gen gens[NGEN] = {{.name = "main"}, {.name = "sdk"}, {.name = "subsdk0"}, {.name = "subsdk1"}};
+    Gen gens[NGEN] = {{.name = "main", .exit = -2}, {.name = "sdk", .exit = -2},
+                      {.name = "subsdk0", .exit = -2}, {.name = "subsdk1", .exit = -2}};
     static const char *const base[NGEN] = {"0x7000000000", "0x7004000000", "0x7006000000", "0x7008000000"};
-    bool ok = true;
-    for (int i = 0; i < NGEN && ok; i++) {
-        Gen *g = &gens[i];
-        g->exit = -1;
-        snprintf(g->log, sizeof g->log, "%s" SEP "gen_%s.log", work, g->name);
-        snprintf(g->out, sizeof g->out, "%s" SEP "%s", work, g->name);
-        char nso[1100];
-        snprintf(nso, sizeof nso, "%s" SEP "exefs" SEP "%s", game_dir, g->name);
-        Args a = {0};
-        add(&a, t.gen);
-        if (t.gen_script[0]) add(&a, t.gen_script);
-        add(&a, g->name);
-        add(&a, nso);
-        add(&a, base[i]);
-        add(&a, g->out);
-        if (i == 1) { add(&a, "--hle"); add(&a, t.hle); }
-        g->p = spawn(a.v, g->log);
-        args_free(&a);
-        if (!g->p) { snprintf(why, why_size, "the game code builder didn't start"); ok = false; }
-    }
+    int budget = o->jobs < 1 ? 1 : o->jobs > 16 ? 16 : o->jobs;
+    int gen_slots = budget >= 8 ? 4 : budget >= 4 ? 2 : 1;
+    LOG("[gamebuild] generator %s%s%s, compiler %s%s; global_child_budget=%d generator_slots=%d "
+        "host_cpu=%d host_ram_mib=%d effective_cpu=%d effective_ram_mib=%d CPU_level=%s\n",
+        t.gen, t.gen_script[0] ? " " : "", t.gen_script, t.cc, t.zig ? " cc" : "", budget, gen_slots,
+        o->host_cores, o->host_ram_mib, o->cpu_cores, o->ram_mib, gamelib_cpu_level());
 
+    bool ok = true;
     Units units = {0};
-    int queued[NGEN] = {0};  // chunk files of each module put in units so far
+    int queued[NGEN] = {0};
     bool tables[NGEN] = {false};
-    int next = 0, jobs = o->jobs < 1 ? 1 : o->jobs > 64 ? 64 : o->jobs;
-    struct { PlatProc p; int unit; } run[64];
-    int nrun = 0;
-    unsigned long long done_bytes = 0;
+    int next_gen = 0, next_unit = 0, nrun = 0, active_gen = 0;
+    struct { PlatProc p; int unit; uint64_t start_ns; } run[64];
+    uint64_t compile_t0 = 0, compile_last_ns = 0, compile_child_ns = 0;
+    unsigned long long done_bytes = 0, compiled_bytes = 0;
+    int compiled_objects = 0;
     double shown = 0;
-    {
-        add_unit(&units, t.entry, work, "gamelib_entry");
+    add_unit(&units, t.entry, work, "gamelib_entry");
+    while (next_gen < NGEN && active_gen < gen_slots && active_gen + nrun < budget) {
+        if (!start_generator(&gens[next_gen], &t, game_dir, work, base[next_gen], why, why_size)) {
+            ok = false;
+            break;
+        }
+        next_gen++;
+        active_gen++;
     }
     while (ok) {
-        // generator progress, newly finished files
         bool gens_done = true;
         double gen_frac = 0;
         unsigned long long written = 0;
+        active_gen = 0;
         for (int i = 0; i < NGEN; i++) {
             Gen *g = &gens[i];
+            if (!g->started) { gens_done = false; continue; }
             if (g->exit < 0) {
                 read_gen_log(g);
                 int r = finished(g->p);
                 if (r >= 0) {
                     g->exit = r;
+                    g->elapsed_ns = plat_now_ns() - g->start_ns;
                     read_gen_log(g);
+                    LOG("[gamebuild] module=%s generator_ms=%llu functions=%llu/%llu chunks=%d exit=%d\n",
+                        g->name, (unsigned long long)(g->elapsed_ns / 1000000ull), g->ci, g->n, g->files, r);
                     if (r != 0) {
                         char last[300];
                         log_tail(g->log, last, sizeof last);
@@ -360,6 +386,8 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
                         snprintf(why, why_size, "the game code couldn't be prepared");
                         ok = false;
                     }
+                } else {
+                    active_gen++;
                 }
             }
             if (g->exit != 0) gens_done = false;
@@ -376,16 +404,31 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
                 add_unit(&units, src, work, stem);
                 tables[i] = true;
             }
-            gen_frac += (g->exit == 0 ? 1 : g->n ? (double)g->ci / (double)g->n : 0) / NGEN;  // (0..1 over all modules)
+            gen_frac += (g->exit == 0 ? 1 : g->n ? (double)g->ci / (double)g->n : 0) / NGEN;
+        }
+        if (!ok) break;
+
+        // Start further generator processes only in unused slots; every child shares this budget.
+        while (next_gen < NGEN && active_gen < gen_slots && active_gen + nrun < budget) {
+            if (!start_generator(&gens[next_gen], &t, game_dir, work, base[next_gen], why, why_size)) {
+                ok = false;
+                break;
+            }
+            next_gen++;
+            active_gen++;
         }
         if (!ok) break;
         for (int k = 0; k < units.n; k++) written += units.u[k].bytes;
 
-        // compiles
-        while (nrun < jobs && next < units.n) {
-            PlatProc p = start_compile(&t, &units.u[next]);
+        int compiler_slots = budget - active_gen;
+        if (compiler_slots < 0) compiler_slots = 0;
+        while (nrun < compiler_slots && next_unit < units.n) {
+            PlatProc p = start_compile(&t, &units.u[next_unit]);
             if (!p) { snprintf(why, why_size, "the compiler didn't start"); ok = false; break; }
-            run[nrun].p = p, run[nrun].unit = next++;
+            run[nrun].p = p;
+            run[nrun].unit = next_unit++;
+            run[nrun].start_ns = plat_now_ns();
+            if (!compile_t0) compile_t0 = run[nrun].start_ns;
             nrun++;
         }
         for (int k = 0; k < nrun; k++) {
@@ -399,12 +442,16 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
                 snprintf(why, why_size, "the game code didn't compile");
                 ok = false;
             }
+            compile_child_ns += plat_now_ns() - run[k].start_ns;
+            compile_last_ns = plat_now_ns();
             done_bytes += u->bytes;
+            compiled_bytes += u->bytes;
+            compiled_objects++;
             if (run[k].unit > 0) remove(u->src);  // (generated C, done with: not kept. Unit 0 is the shipped entry file)
             run[k--] = run[--nrun];
         }
         if (!ok) break;
-        if (gens_done && next == units.n && nrun == 0) break;
+        if (gens_done && next_unit == units.n && nrun == 0) break;
 
         // progress: the generator's share (its functions written), the compiler's (bytes of C compiled, of an
         // estimate of all of it while the generator still writes)
@@ -420,11 +467,17 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
     }
     for (int k = 0; k < nrun; k++) stop(run[k].p);  // (a failure: the rest is of no use - the failure shows at once)
     for (int i = 0; i < NGEN; i++)
-        if (gens[i].p && gens[i].exit < 0) stop(gens[i].p);
+        if (gens[i].started && gens[i].p && gens[i].exit < 0) stop(gens[i].p);
+
+    if (compile_t0)
+        LOG("[gamebuild] compile_objects=%d compiled_c_bytes=%llu compile_child_ms=%llu compile_wall_ms=%llu\n",
+            compiled_objects, compiled_bytes, (unsigned long long)(compile_child_ns / 1000000ull),
+            (unsigned long long)((compile_last_ns > compile_t0 ? compile_last_ns - compile_t0 : 0) / 1000000ull));
 
     // 2. link
     if (ok) {
         if (o->progress) o->progress(shown > 0.95 ? shown : 0.95, "Finishing...");
+        uint64_t link_t0 = plat_now_ns();
         char rsp[1100], log[1100];
         snprintf(rsp, sizeof rsp, "%s" SEP "link.rsp", work);
         snprintf(log, sizeof log, "%s" SEP "link.log", work);
@@ -468,6 +521,7 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
         PlatProc p = f ? spawn(a.v, log) : 0;
         args_free(&a);
         int r = p ? wait_for(p) : 255;
+        LOG("[gamebuild] link_ms=%llu exit=%d\n", (unsigned long long)((plat_now_ns() - link_t0) / 1000000ull), r);
         if (r != 0) {
             char last[300];
             log_tail(log, last, sizeof last);
@@ -489,7 +543,8 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
     }
     free(units.u);
     rt_remove_game_file(game_dir, ".gamebuild");  // the C, the objects, the logs
-    LOG("[gamebuild] %s in %.0fs\n", ok ? "done" : "failed", (double)(plat_now_ns() - t0) / 1e9);
+    LOG("[gamebuild] %s total_ms=%llu global_child_budget=%d\n", ok ? "done" : "failed",
+        (unsigned long long)((plat_now_ns() - t0) / 1000000ull), budget);
     if (ok && o->progress) o->progress(1, "Finishing...");
     return ok;
 }
