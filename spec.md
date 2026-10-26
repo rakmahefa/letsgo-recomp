@@ -439,12 +439,14 @@ Une release Linux est prête lorsque :
 
 1. un tag/version/commit cohérent est validé automatiquement ;
 2. le workflow de publication passe en dry-run avec les mêmes validations et sans aucune mutation ;
-2. le build et les dépendances de chaque binaire embarqué passent les contrôles ;
-3. l'AppImage se structure et démarre dans le scénario de test déclaré ;
-4. le helper et Zig sont vérifiés avec un cache de compilation propre ;
-5. les sommes SHA-256, manifest de build, provenance et SBOM sont publiés ;
-6. chaque composant distribué dispose de la notice requise ;
-7. README et note de release décrivent les exigences réelles et les limites connues ;
-8. aucun dump, clé, save ou contenu propriétaire du jeu ne se trouve dans les artefacts.
+3. le build et les dépendances de chaque binaire embarqué passent les contrôles ;
+4. l'AppImage se structure et démarre dans le scénario de test déclaré ;
+5. le helper et Zig sont vérifiés avec un cache de compilation propre ;
+6. les sommes SHA-256, manifest de build, provenance et SBOM sont publiés ;
+7. chaque composant distribué dispose de la notice requise ;
+8. README et note de release décrivent les exigences réelles et les limites connues ;
+9. aucun dump, clé, save ou contenu propriétaire du jeu ne se trouve dans les artefacts.
+
+Le parcours de setup du jeu est également prêt lorsque son mode dry-run ne modifie aucun fichier, que les durées des phases sont mesurables et que la recherche des fichiers ne parcourt plus inutilement les ressources d'un RomFS déjà reconnu.
 
 **Ordre conseillé :** sécuriser et éprouver la release en dry-run, mesurer le setup initial, corriger la recherche excessive dans RomFS, puis traiter la phase dominante identifiée par les mesures. L'optimisation des temps et de la taille vient après la fiabilité et la mesure reproductible.
