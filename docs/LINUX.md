@@ -38,7 +38,7 @@ La release fournit également `BUILD-INFO.txt`, `DEPENDENCIES.json` (versions, c
 
 Aucun fichier de jeu, clé, sauvegarde ou dump n'est fourni par le projet. Choisissez uniquement du contenu auquel vous êtes légalement autorisé à accéder.
 
-Avant le setup graphique, vous pouvez vérifier un dossier sans modifier de fichiers ni lancer le générateur ou le compilateur. Pour une vérification directe, la ligne de commande ci-dessous est préférée. Le mode développeur `LARECOMP_SETUP_DRY_RUN=1` peut aussi être utilisé avec `LARECOMP_SETUP_DIR` pour afficher le résultat dans le launcher sans préparer le jeu ; `LARECOMP_SETUP_REDACT_PATHS=1` masque les chemins personnels :
+Avant le setup graphique, vous pouvez vérifier un dossier sans modifier de fichiers ni lancer le générateur ou le compilateur. Pour une vérification directe, la ligne de commande ci-dessous est préférée. Pour vérifier dans le launcher, définissez `LARECOMP_SETUP_DRY_RUN=1`, sélectionnez le dossier du jeu puis lancez le setup : le launcher affiche le résultat au lieu de préparer le jeu. `LARECOMP_SETUP_REDACT_PATHS=1` masque les chemins personnels. Il n’existe pas de variable `LARECOMP_SETUP_DIR` ; le dossier doit être choisi dans l’interface :
 
 ```bash
 ./LetsGoRecomp-<version>-linux-x86_64.AppImage --setup-dry-run "/chemin/vers/le/dossier"
