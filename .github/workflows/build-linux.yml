@@ -27,6 +27,9 @@ jobs:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
+      - name: Record build start time
+        run: echo "BUILD_STARTED_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
+
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -398,6 +401,16 @@ jobs:
           # Sidecars contain only the basenames so sha256sum -c works from the download folder.
           sha256sum "$archive" > "$archive.sha256"
           sha256sum "$(basename "$appimage")" > "$(basename "$appimage").sha256"
+          {
+            echo "Let's Go Recomp Linux bundle size report"
+            echo "Build commit: $GITHUB_SHA"
+            echo
+            echo "AppDir and downloadable artifact sizes:"
+            du -sh "$appdir" "$appimage" "$GITHUB_WORKSPACE/build/dist/$archive"
+            echo
+            echo "Largest 25 files in AppDir (bytes, path):"
+            find "$appdir" -type f -printf '%s\t%p\n' | sort -nr | head -25 | awk -F '\t' '{ printf "%12s  %s\n", $1, $2 }'
+          } > "$GITHUB_WORKSPACE/build/dist/build-size-report.txt"
           cd "$GITHUB_WORKSPACE"
           .venv/bin/python tools/write_release_manifest.py \
             --appimage "$appimage" \
@@ -405,6 +418,7 @@ jobs:
             --manifest "$GITHUB_WORKSPACE/build/dist/build-manifest.json" \
             --sbom "$GITHUB_WORKSPACE/build/dist/sbom.cdx.json" \
             --dependencies "$GITHUB_WORKSPACE/build/dist/DEPENDENCIES.json" \
+            --size-report "$GITHUB_WORKSPACE/build/dist/build-size-report.txt" \
             --elf-report "$GITHUB_WORKSPACE/build/dist/linux-elf-audit.json" \
             --output "$GITHUB_WORKSPACE/build/dist/build-manifest-release.json" \
             --run-id "$GITHUB_RUN_ID" --repository "$GITHUB_REPOSITORY"
@@ -420,6 +434,7 @@ jobs:
             build/dist/LetsGoRecomp-*-linux-x86_64.AppImage.sha256
             build/dist/BUILD-INFO.txt
             build/dist/DEPENDENCIES.json
+            build/dist/build-size-report.txt
             build/dist/build-manifest.json
             build/dist/build-manifest-release.json
             build/dist/sbom.cdx.json
@@ -433,8 +448,12 @@ jobs:
           GH_REPOSITORY: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
         run: |
+          elapsed_seconds=$(( $(date +%s) - BUILD_STARTED_EPOCH ))
           {
             echo "## Linux AppImage ready"
+            echo
+            echo "- Total build-job wall time: ${elapsed_seconds}s"
+            echo "- Bundle-size profile: `build/dist/build-size-report.txt` (also uploaded with this artifact)"
             echo
             echo "Recommended download: the **LetsGoRecomp-*-linux-x86_64.AppImage** asset. The FFmpeg and SDL3 runtime libraries are bundled, shaderc is linked statically; Vulkan drivers and system graphics/audio integration remain host-provided."
             echo
