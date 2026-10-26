@@ -42,6 +42,20 @@ jobs:
             libibus-1.0-dev libudev-dev \
             python3 python3-venv python3-pip patchelf zip unzip squashfs-tools desktop-file-utils imagemagick
 
+      - name: Set up Python generator
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --upgrade 'pip==25.2'
+          .venv/bin/python -m pip install -r tools/requirements-linux-generator.txt
+
+      - name: Build standalone game-code generator
+        run: |
+          set -euo pipefail
+          .venv/bin/python -m PyInstaller --noconfirm --clean --log-level WARN \
+            --distpath build/helper --workpath build/pyinstaller tools/lasgen.spec
+          test -x build/helper/lasgen/lasgen
+          build/helper/lasgen/lasgen --help >/dev/null
+
       - name: Install Clang 21 toolchain
         run: |
           set -euo pipefail
@@ -153,22 +167,8 @@ jobs:
           sudo ldconfig
           install -m 644 /tmp/SDL/LICENSE.txt "$GITHUB_WORKSPACE/build/licenses/SDL-LICENSE.txt"
 
-      - name: Set up Python generator
-        run: |
-          python3 -m venv .venv
-          .venv/bin/python -m pip install --upgrade 'pip==25.2'
-          .venv/bin/python -m pip install -r tools/requirements-linux-generator.txt
-
       - name: Build native Linux runtime
         run: make -j2 CC=clang-21 CXX=clang++-21 DEPS=/usr/local SHADERC=-lshaderc_combined build/lasrecomp
-
-      - name: Build standalone game-code generator
-        run: |
-          set -euo pipefail
-          .venv/bin/python -m PyInstaller --noconfirm --clean --log-level WARN \
-            --distpath build/helper --workpath build/pyinstaller tools/lasgen.spec
-          test -x build/helper/lasgen/lasgen
-          build/helper/lasgen/lasgen --help >/dev/null
 
       - name: Test setup dry-run with synthetic fixtures
         run: |
