@@ -57,8 +57,9 @@ jobs:
           python3 -m py_compile \
             tools/release_policy.py tools/audit_linux_elf.py \
             tools/write_linux_metadata.py tools/write_release_manifest.py \
-            tests/test_linux_release_policy.py tests/test_setup_dry_run.py
+            tests/test_linux_release_policy.py tests/test_setup_dry_run.py tests/test_lasgen_spec.py
           python3 tests/test_linux_release_policy.py
+          python3 tests/test_lasgen_spec.py
           python3 -m json.tool tools/linux-dependencies.json >/dev/null
           echo "Read-only policy and syntax checks passed; no publication token or write permission is available."
 
