@@ -394,7 +394,7 @@ bool romfs_copy_tree(const char *src, const char *dst, void (*progress)(uint64_t
 bool romfs_copy_file(const char *src, const char *dst, void (*progress)(uint64_t, uint64_t)) {
     struct stat st;
     if (stat(src, &st) != 0) return false;
-    g_hardlink_files = g_hardlink_bytes = g_copy_files = g_copy_bytes = 0;
+    g_hardlink_files = g_hardlink_bytes = g_reflink_files = g_reflink_bytes = g_copy_files = g_copy_bytes = 0;
     g_copy_start_ns = plat_now_ns();
     uint64_t done = 0;
     bool ok = copy_file(src, dst, (uint64_t)st.st_size, &done, (uint64_t)st.st_size, progress);
