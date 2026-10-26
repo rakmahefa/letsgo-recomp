@@ -273,7 +273,7 @@ jobs:
           # Capture tool versions and hashes of payload files before packaging.
           .venv/bin/python tools/write_linux_metadata.py \
             --appdir "$appdir" --version "$version" --commit "$GITHUB_SHA" --ref "$GITHUB_REF" \
-            --python .venv/bin/python --zig build/zig/zig --clang clang-21 \
+            --python .venv/bin/python --dependency-lock tools/linux-dependencies.json --zig build/zig/zig --clang clang-21 \
             --ffmpeg 6.1.6 --sdl release-3.4.18 --vulkan-headers v1.3.296 --vma v3.1.0 --shaderc v2024.4
 
       - name: Build AppImage and verify bundled runtime
@@ -388,6 +388,7 @@ jobs:
           }
 
           cp "$appdir/BUILD-INFO.txt" "$GITHUB_WORKSPACE/build/dist/BUILD-INFO.txt"
+          cp "$appdir/DEPENDENCIES.json" "$GITHUB_WORKSPACE/build/dist/DEPENDENCIES.json"
           cp "$appdir/build-manifest.json" "$GITHUB_WORKSPACE/build/dist/build-manifest.json"
           cp "$appdir/sbom.cdx.json" "$GITHUB_WORKSPACE/build/dist/sbom.cdx.json"
 
@@ -403,6 +404,7 @@ jobs:
             --archive "$GITHUB_WORKSPACE/build/dist/$archive" \
             --manifest "$GITHUB_WORKSPACE/build/dist/build-manifest.json" \
             --sbom "$GITHUB_WORKSPACE/build/dist/sbom.cdx.json" \
+            --dependencies "$GITHUB_WORKSPACE/build/dist/DEPENDENCIES.json" \
             --elf-report "$GITHUB_WORKSPACE/build/dist/linux-elf-audit.json" \
             --output "$GITHUB_WORKSPACE/build/dist/build-manifest-release.json" \
             --run-id "$GITHUB_RUN_ID" --repository "$GITHUB_REPOSITORY"
@@ -417,6 +419,7 @@ jobs:
             build/dist/LetsGoRecomp-*-linux-x86_64.AppImage
             build/dist/LetsGoRecomp-*-linux-x86_64.AppImage.sha256
             build/dist/BUILD-INFO.txt
+            build/dist/DEPENDENCIES.json
             build/dist/build-manifest.json
             build/dist/build-manifest-release.json
             build/dist/sbom.cdx.json
