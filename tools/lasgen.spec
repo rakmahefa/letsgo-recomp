@@ -28,7 +28,9 @@ a = Analysis(
     # Keep pkg_resources and its dynamic submodules in the frozen app; excluding it makes the
     # native runtime compile successfully but crashes the packaged helper before --help.
     hiddenimports=collect_submodules('unicorn') + collect_submodules('pkg_resources'),
-    excludes=['tkinter', 'pydoc', 'doctest', 'unittest', 'pdb', 'IPython', 'numpy', 'setuptools', '_distutils_hack',
+    # setuptools >= 71 exposes jaraco.text via setuptools._vendor; PyInstaller's pkg_resources hook aliases
+    # that module to the vendored copy. Keep setuptools available so the alias resolves in the frozen helper.
+    excludes=['tkinter', 'pydoc', 'doctest', 'unittest', 'pdb', 'IPython', 'numpy', '_distutils_hack',
               'ssl', '_ssl', '_hashlib', '_multibytecodec', '_codecs_cn', '_codecs_hk',
               '_codecs_iso2022', '_codecs_jp', '_codecs_kr', '_codecs_tw', '_decimal'],
     noarchive=False,
