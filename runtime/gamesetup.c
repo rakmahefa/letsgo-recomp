@@ -326,6 +326,7 @@ static void *setup_thread(void *arg) {
     g_progress = 0;
     if (!g_folder[0]) {  // only the game code (files set up already, e.g. a new version of the app)
         LOG("[setup] the game files are set up, the game code is from another version: rebuilding it\n");
+        g_code_base = 0.0f;
         if (build_code()) g_state = setup_ready() ? SETUP_DONE : SETUP_FAIL_BUILD;
         LOG("[setup] rebuild-only total_ms=%llu\n", (unsigned long long)((plat_now_ns() - setup_t0) / 1000000ull));
         g_running = false;
