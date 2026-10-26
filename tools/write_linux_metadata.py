@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 import platform
 import subprocess
+from urllib.parse import quote
 
 
 EXCLUDED_METADATA = {"BUILD-INFO.txt", "build-manifest.json", "sbom.cdx.json"}
@@ -36,7 +37,7 @@ def license_component(name: str, version: str, license_id: str, component_type: 
         "name": name,
         "version": version,
         "licenses": [{"license": {"id": license_id}}],
-        "bom-ref": f"pkg:generic/{name.lower().replace(' ', '-') }@{version}",
+        "bom-ref": f"pkg:generic/{quote(name.lower().replace(' ', '-'), safe='-._~')}@{version}",
     }
 
 
@@ -69,7 +70,7 @@ def main() -> int:
         except OSError as exc:
             parser.error(f"could not inventory {path}: {exc}")
 
-    python_exe = str(args.python.resolve())
+    python_exe = str(args.python.absolute())
     packages = {}
     for dist in importlib.metadata.distributions():
         name = dist.metadata.get("Name", "").strip()
