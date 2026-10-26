@@ -42,6 +42,11 @@ struct Dir {
 static int by_name_dir(const void *a, const void *b) { return strcmp((*(Dir *const *)a)->name, (*(Dir *const *)b)->name); }
 static int by_name_file(const void *a, const void *b) { return strcmp((*(File *const *)a)->name, (*(File *const *)b)->name); }
 
+static unsigned long long g_hardlink_files, g_hardlink_bytes, g_copy_files, g_copy_bytes;
+static uint64_t g_copy_start_ns;
+
+
+
 static Dir *scan(const char *path, const char *name, Dir *parent, int depth) {
     if (depth > 32) return NULL;
     DIR *d = opendir(path);
@@ -150,6 +155,9 @@ static bool copy_data(FILE *out, const char *path, uint64_t size, uint8_t *buf, 
 bool romfs_build(const char *dir, const char *out_path, void (*progress)(uint64_t, uint64_t), char *why, size_t why_size) {
     #define FAIL(...) do { if (why) snprintf(why, why_size, __VA_ARGS__); goto fail; } while (0)
     bool ok = false;
+    uint64_t scan_t0 = plat_now_ns();
+    uint64_t scan_ms = 0, write_t0 = 0, write_ms = 0;
+    uint64_t image_bytes = 0;
     FILE *out = NULL;
     uint8_t *dtab = NULL, *ftab = NULL, *buf = NULL;
     uint32_t *dbuckets = NULL, *fbuckets = NULL;
@@ -160,6 +168,7 @@ bool romfs_build(const char *dir, const char *out_path, void (*progress)(uint64_
     if (l.nd == l.cd) l.dirs = realloc(l.dirs, sizeof *l.dirs * (l.cd = 64));
     l.dirs[l.nd++] = root;
     flatten(root, &l);
+    scan_ms = (plat_now_ns() - scan_t0) / 1000000ull;
     if (!l.nf) FAIL("no files in %s", dir);
 
     // entry offsets
@@ -217,11 +226,13 @@ bool romfs_build(const char *dir, const char *out_path, void (*progress)(uint64_
 
     // header: tables after the file data (4-byte aligned)
     uint64_t dhash_off = (DATA_START + data + 3) & ~3ull;
+    image_bytes = fmeta_off + fsize;
     uint64_t dmeta_off = dhash_off + 4ull * nbd, fhash_off = dmeta_off + dsize, fmeta_off = fhash_off + 4ull * nbf;
     uint8_t hdr[DATA_START] = {0};
     uint64_t hv[10] = {0x50, dhash_off, 4ull * nbd, dmeta_off, dsize, fhash_off, 4ull * nbf, fmeta_off, fsize, DATA_START};
     memcpy(hdr, hv, sizeof hv);
 
+    write_t0 = plat_now_ns();
     out = fopen(out_path, "wb");
     if (!out) FAIL("can't write %s", out_path);
     if (fwrite(hdr, 1, DATA_START, out) != DATA_START) FAIL("write failed (disk full?)");
@@ -243,6 +254,11 @@ bool romfs_build(const char *dir, const char *out_path, void (*progress)(uint64_
         FAIL("write failed (disk full?)");
     if (fclose(out) != 0) { out = NULL; FAIL("write failed (disk full?)"); }
     out = NULL;
+    write_ms = (plat_now_ns() - write_t0) / 1000000ull;
+    fprintf(stderr, "[romfs] source=%s scan_ms=%llu dirs=%d files=%d data_bytes=%llu image_bytes=%llu write_ms=%llu throughput_mib_s=%.2f\n",
+            dir, (unsigned long long)scan_ms, l.nd, l.nf, (unsigned long long)total,
+            (unsigned long long)image_bytes, (unsigned long long)write_ms,
+            write_ms ? ((double)total * 1000.0 / (double)write_ms / (1024.0 * 1024.0)) : 0.0);
     ok = true;
 fail:
     if (out) fclose(out);
@@ -278,9 +294,15 @@ static bool copy_file(const char *src, const char *dst, uint64_t size, uint64_t 
         }
         if (in) fclose(in);
         if (out && fclose(out) != 0) ok = false;
+        if (ok) {
+            g_copy_files++;
+            g_copy_bytes += size;
+        }
         return ok;
     }
 linked:
+    g_hardlink_files++;
+    g_hardlink_bytes += size;
     *done += size;
     if (progress) progress(*done, total);
     return true;
@@ -327,6 +349,8 @@ bool romfs_image_ok(const char *path, char *why, size_t why_size) {
 }
 
 bool romfs_copy_tree(const char *src, const char *dst, void (*progress)(uint64_t, uint64_t)) {
+    g_hardlink_files = g_hardlink_bytes = g_copy_files = g_copy_bytes = 0;
+    g_copy_start_ns = plat_now_ns();
     Dir *t = scan(src, "", NULL, 0);
     if (!t) return false;
     Lists l = {0};
@@ -336,12 +360,21 @@ bool romfs_copy_tree(const char *src, const char *dst, void (*progress)(uint64_t
     bool ok = copy_dir(t, dst, &done, total, progress);
     free(l.dirs), free(l.files);
     free_tree(t);
+    fprintf(stderr, "[romfs-copy] source=%s mode=tree result=%s hardlink_or_clone_files=%llu linked_bytes=%llu copied_files=%llu copied_bytes=%llu total_ms=%llu\n",
+            src, ok ? "ok" : "failed", g_hardlink_files, g_hardlink_bytes, g_copy_files, g_copy_bytes,
+            (unsigned long long)((plat_now_ns() - g_copy_start_ns) / 1000000ull));
     return ok;
 }
 
 bool romfs_copy_file(const char *src, const char *dst, void (*progress)(uint64_t, uint64_t)) {
     struct stat st;
     if (stat(src, &st) != 0) return false;
+    g_hardlink_files = g_hardlink_bytes = g_copy_files = g_copy_bytes = 0;
+    g_copy_start_ns = plat_now_ns();
     uint64_t done = 0;
-    return copy_file(src, dst, (uint64_t)st.st_size, &done, (uint64_t)st.st_size, progress);
+    bool ok = copy_file(src, dst, (uint64_t)st.st_size, &done, (uint64_t)st.st_size, progress);
+    fprintf(stderr, "[romfs-copy] source=%s mode=file result=%s hardlink_or_clone_files=%llu linked_bytes=%llu copied_files=%llu copied_bytes=%llu total_ms=%llu\n",
+            src, ok ? "ok" : "failed", g_hardlink_files, g_hardlink_bytes, g_copy_files, g_copy_bytes,
+            (unsigned long long)((plat_now_ns() - g_copy_start_ns) / 1000000ull));
+    return ok;
 }
