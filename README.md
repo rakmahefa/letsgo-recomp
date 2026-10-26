@@ -1,6 +1,6 @@
 # Let's Go Recomp
 
-A native Windows port of **Pokémon: Let's Go, Eevee!** and **Let's Go, Pikachu!** (Nintendo Switch), made by
+A native Windows port and experimental Linux x86_64 build of **Pokémon: Let's Go, Eevee!** and **Let's Go, Pikachu!** (Nintendo Switch), made by
 **static recompilation**: the game's ARM64 code is translated into C and compiled for your PC, and a runtime stands in
 for the Switch (system services, NVN graphics on Vulkan, audio, controllers). **It is not an emulator.** Built on
 **[LAS Recomp](https://github.com/peiikai/LASRecomp)** by Peiikai.
