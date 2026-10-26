@@ -13,7 +13,7 @@ import subprocess
 from urllib.parse import quote
 
 
-EXCLUDED_METADATA = {"BUILD-INFO.txt", "build-manifest.json", "sbom.cdx.json"}
+EXCLUDED_METADATA = {"BUILD-INFO.txt", "build-manifest.json", "sbom.cdx.json", "DEPENDENCIES.json"}
 
 
 def sha256(path: Path) -> str:
@@ -48,6 +48,7 @@ def main() -> int:
     parser.add_argument("--commit", required=True)
     parser.add_argument("--ref", required=True)
     parser.add_argument("--python", required=True, type=Path)
+    parser.add_argument("--dependency-lock", required=True, type=Path)
     parser.add_argument("--zig", required=True, type=Path)
     parser.add_argument("--clang", default="clang-21")
     parser.add_argument("--ffmpeg", default="6.1.6")
@@ -60,6 +61,13 @@ def main() -> int:
     appdir = args.appdir.resolve()
     if not appdir.is_dir():
         parser.error(f"AppDir not found: {appdir}")
+    if not args.dependency_lock.is_file():
+        parser.error(f"dependency lock not found: {args.dependency_lock}")
+    dependency_lock_bytes = args.dependency_lock.read_bytes()
+    dependency_doc = json.loads(dependency_lock_bytes)
+    if dependency_doc.get("schema_version") != 1 or not isinstance(dependency_doc.get("dependencies"), list):
+        parser.error("dependency lock has an unsupported schema")
+    dependency_lock_sha256 = hashlib.sha256(dependency_lock_bytes).hexdigest()
     payload = []
     for path in sorted(appdir.rglob("*")):
         if not path.is_file() or path.name in EXCLUDED_METADATA:
@@ -97,9 +105,13 @@ def main() -> int:
         "vulkan_headers": args.vulkan_headers,
         "vulkan_memory_allocator": args.vma,
         "shaderc": args.shaderc,
+        "dependency_lock_sha256": dependency_lock_sha256,
+        "dependency_pinning_policy": dependency_doc["policy"],
+        "dependencies": dependency_doc["dependencies"],
         "payload_file_count": len(payload),
         "payload": payload,
     }
+    (appdir / "DEPENDENCIES.json").write_bytes(dependency_lock_bytes)
     (appdir / "build-manifest.json").write_text(json.dumps(build, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     info = [
         "Let's Go Recomp — Linux build identity",
@@ -111,6 +123,7 @@ def main() -> int:
         f"python={build['python']}",
         f"clang={clang_version}",
         f"zig={zig_version}",
+        f"dependency_lock_sha256={dependency_lock_sha256}",
         f"SDL3={args.sdl}",
         f"FFmpeg={args.ffmpeg}",
         f"Vulkan-Headers={args.vulkan_headers}",
