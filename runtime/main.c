@@ -163,6 +163,16 @@ static void boot(const char *root) {
 }
 
 int main(int argc, char **argv) {
+    // This read-only diagnostic must run before plat_init()/rt_paths_init(): it must not create
+    // the XDG data root or rotate/create lasrecomp.log, and it never initializes a GPU.
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--setup-dry-run")) {
+            if (i + 1 >= argc || !strcmp(argv[i + 1], "--redact-paths"))
+                return setup_dry_run(NULL, false);
+            bool redact = i + 2 < argc && !strcmp(argv[i + 2], "--redact-paths");
+            return setup_dry_run(argv[i + 1], redact);
+        }
+    }
     plat_init();
 #ifdef _WIN32
     setvbuf(stderr, NULL, _IONBF, 0);  // the Windows CRT treats _IOLBF as full buffering
