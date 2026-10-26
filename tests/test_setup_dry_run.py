@@ -77,7 +77,20 @@ def main() -> int:
         home = root / "home"
         xdg = root / "xdg"
         env = os.environ.copy()
-        env.update({"HOME": str(home), "XDG_DATA_HOME": str(xdg)})
+        marker = root / "helper-was-invoked.marker"
+        fake_helper = root / "fake-helper.sh"
+        fake_helper.write_text(
+            '#!/bin/sh\nprintf invoked >> "$DRY_RUN_HELPER_MARKER"\nexit 98\n',
+            encoding="utf-8",
+        )
+        fake_helper.chmod(0o755)
+        env.update({
+            "HOME": str(home),
+            "XDG_DATA_HOME": str(xdg),
+            "LARECOMP_GEN": str(fake_helper),
+            "LARECOMP_CC": str(fake_helper),
+            "DRY_RUN_HELPER_MARKER": str(marker),
+        })
         env.pop("LARECOMP_DATA_ROOT", None)
 
         # Conventional nested layout: exefs + a RomFS directory.
@@ -131,7 +144,8 @@ def main() -> int:
         assert not xdg.exists(), "dry-run created an XDG data directory"
         assert not home.exists(), "dry-run created a HOME directory"
         assert not (work / "lasrecomp.log").exists(), "dry-run initialised runtime logging"
-        print("PASS: setup dry-run is read-only for nested, flat, romfs.bin, invalid and packaged fixtures")
+        assert not marker.exists(), "dry-run launched the configured generator/compiler helper"
+        print("PASS: setup dry-run is read-only and launches no configured generator/compiler for nested, flat, romfs.bin, invalid and packaged fixtures")
     return 0
 
 
