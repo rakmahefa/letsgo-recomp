@@ -134,6 +134,7 @@ jobs:
             "${bundles[0]}" "${bundle_checksums[0]}"
             "${appimages[0]}" "${appimage_checksums[0]}"
             artifact/BUILD-INFO.txt
+            artifact/DEPENDENCIES.json
             artifact/build-manifest.json
             artifact/build-manifest-release.json
             artifact/sbom.cdx.json
