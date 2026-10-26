@@ -4,8 +4,8 @@ pip==25.2
 setuptools==80.9.0
 altgraph==0.17.4
 packaging==25.0
-pyinstaller-hooks-contrib==2025.10
-pyinstaller==6.16.0
+pyinstaller-hooks-contrib==2026.9
+pyinstaller==6.22.3
 capstone==5.0.6
 unicorn==2.1.2
 lz4==4.4.4
