@@ -30,7 +30,10 @@ a = Analysis(
     hiddenimports=collect_submodules('unicorn') + collect_submodules('pkg_resources'),
     # setuptools >= 71 exposes jaraco.text via setuptools._vendor; PyInstaller's pkg_resources hook aliases
     # that module to the vendored copy. Keep setuptools available so the alias resolves in the frozen helper.
+    # This is a non-interactive CLI helper; excluding readline avoids an unnecessary host
+    # libreadline dependency from Python's optional interactive shell support.
     excludes=['tkinter', 'pydoc', 'doctest', 'unittest', 'pdb', 'IPython', 'numpy', '_distutils_hack',
+              'readline', 'rlcompleter',
               'ssl', '_ssl', '_hashlib', '_multibytecodec', '_codecs_cn', '_codecs_hk',
               '_codecs_iso2022', '_codecs_jp', '_codecs_kr', '_codecs_tw', '_decimal'],
     noarchive=False,
