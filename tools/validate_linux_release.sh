@@ -32,7 +32,9 @@ head_repository="$(jq -r '.head_repository.full_name // empty' "$run_json")"
 [[ "$status" == "completed" && "$conclusion" == "success" ]] || {
   echo "Refusing publication: selected run is not completed successfully." >&2; exit 1;
 }
-[[ "$workflow_name" == "Linux native build" && "$workflow_path" == ".github/workflows/build-linux.yml" ]] || {
+[[ "$workflow_name" == "Linux native build" &&
+   ( "$workflow_path" == ".github/workflows/build-linux.yml" ||
+     "$workflow_path" == ".github/workflows/build-linux.yml@refs/heads/main" ) ]] || {
   echo "Refusing publication: run is not the trusted Linux native build workflow." >&2; exit 1;
 }
 [[ "$event" == "push" && "$branch" == "main" ]] || {
