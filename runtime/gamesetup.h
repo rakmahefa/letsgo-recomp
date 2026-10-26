@@ -19,6 +19,7 @@ enum {
     SETUP_COMPILING,    // compiler
     SETUP_FINISHING,    // linking
     SETUP_DONE,         // ready to play
+    SETUP_DRY_RUN_DONE, // source validated; no files were changed and the game is not ready to launch
     // failures (setup_state)
     SETUP_FAIL_NOT_FOUND,   // no exefs/main + romfs in that folder
     SETUP_FAIL_PACKAGE,     // .xci / .nsp found instead of extracted files
