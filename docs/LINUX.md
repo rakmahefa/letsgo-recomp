@@ -27,7 +27,7 @@ sha256sum -c LetsGoRecomp-<version>-linux-x86_64.AppImage.sha256
 
 Pour l'archive, utilisez `sha256sum -c LetsGoRecomp-<version>-linux-x86_64.tar.gz.sha256`. Ne lancez pas le programme si la vérification échoue.
 
-La release fournit également `BUILD-INFO.txt`, `build-manifest.json`, `build-manifest-release.json`, `sbom.cdx.json` et `linux-elf-audit.json`. Le manifeste de release contient les sommes SHA-256 des fichiers téléchargeables ; le manifeste interne inventorie les fichiers de l'AppDir assemblé avant l'ajout final des dépendances par linuxdeploy. Le rapport ELF, lui, inspecte les ELF présents dans l'AppImage extrait.
+La release fournit également `BUILD-INFO.txt`, `DEPENDENCIES.json` (versions, commits et sommes attendues des dépendances), `build-manifest.json`, `build-manifest-release.json`, `build-size-report.txt`, `sbom.cdx.json` et `linux-elf-audit.json`. Le manifeste de release contient les sommes SHA-256 des fichiers téléchargeables ; le manifeste interne inventorie les fichiers de l'AppDir assemblé avant l'ajout final des dépendances par linuxdeploy. Le rapport ELF, lui, inspecte les ELF présents dans l'AppImage extrait.
 
 ## Installer et préparer le jeu
 
@@ -38,7 +38,7 @@ La release fournit également `BUILD-INFO.txt`, `build-manifest.json`, `build-ma
 
 Aucun fichier de jeu, clé, sauvegarde ou dump n'est fourni par le projet. Choisissez uniquement du contenu auquel vous êtes légalement autorisé à accéder.
 
-Avant le setup graphique, vous pouvez vérifier un dossier sans modifier de fichiers ni lancer le générateur ou le compilateur :
+Avant le setup graphique, vous pouvez vérifier un dossier sans modifier de fichiers ni lancer le générateur ou le compilateur. Pour une vérification directe, la ligne de commande ci-dessous est préférée. Le mode développeur `LARECOMP_SETUP_DRY_RUN=1` peut aussi être utilisé avec `LARECOMP_SETUP_DIR` pour afficher le résultat dans le launcher sans préparer le jeu ; `LARECOMP_SETUP_REDACT_PATHS=1` masque les chemins personnels :
 
 ```bash
 ./LetsGoRecomp-<version>-linux-x86_64.AppImage --setup-dry-run "/chemin/vers/le/dossier"
