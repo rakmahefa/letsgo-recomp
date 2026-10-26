@@ -73,6 +73,7 @@ tar -tzf "${bundles[0]}" > "$ARTIFACT_DIR/archive-files.txt"
 for required in \
   'LetsGoRecomp/build-manifest.json' \
   'LetsGoRecomp/BUILD-INFO.txt' \
+  'LetsGoRecomp/DEPENDENCIES.json' \
   'LetsGoRecomp/sbom.cdx.json' \
   'LetsGoRecomp/usr/bin/lasgen/lasgen' \
   'LetsGoRecomp/usr/bin/zig/zig' \
@@ -86,14 +87,16 @@ if grep -Eq '(^/|(^|/)\.\.(/|$))' "$ARTIFACT_DIR/archive-files.txt"; then
 fi
 tar -xOf "${bundles[0]}" LetsGoRecomp/build-manifest.json > "$ARTIFACT_DIR/embedded-build-manifest.json"
 tar -xOf "${bundles[0]}" LetsGoRecomp/BUILD-INFO.txt > "$ARTIFACT_DIR/embedded-BUILD-INFO.txt"
+tar -xOf "${bundles[0]}" LetsGoRecomp/DEPENDENCIES.json > "$ARTIFACT_DIR/embedded-DEPENDENCIES.json"
 tar -xOf "${bundles[0]}" LetsGoRecomp/sbom.cdx.json > "$ARTIFACT_DIR/embedded-sbom.cdx.json"
 
-[[ -f "$ARTIFACT_DIR/build-manifest.json" && -f "$ARTIFACT_DIR/sbom.cdx.json" && -f "$ARTIFACT_DIR/BUILD-INFO.txt" ]] || {
+[[ -f "$ARTIFACT_DIR/build-manifest.json" && -f "$ARTIFACT_DIR/sbom.cdx.json" && -f "$ARTIFACT_DIR/BUILD-INFO.txt" && -f "$ARTIFACT_DIR/DEPENDENCIES.json" ]] || {
   echo "Missing external copies of build metadata/SBOM." >&2; exit 1;
 }
 cmp "$ARTIFACT_DIR/build-manifest.json" "$ARTIFACT_DIR/embedded-build-manifest.json"
 cmp "$ARTIFACT_DIR/sbom.cdx.json" "$ARTIFACT_DIR/embedded-sbom.cdx.json"
 cmp "$ARTIFACT_DIR/BUILD-INFO.txt" "$ARTIFACT_DIR/embedded-BUILD-INFO.txt"
+cmp "$ARTIFACT_DIR/DEPENDENCIES.json" "$ARTIFACT_DIR/embedded-DEPENDENCIES.json"
 
 version="$(jq -er '.version' "$ARTIFACT_DIR/build-manifest.json")"
 manifest_sha="$(jq -er '.source_commit' "$ARTIFACT_DIR/build-manifest.json")"
@@ -106,6 +109,11 @@ manifest_ref="$(jq -er '.source_ref' "$ARTIFACT_DIR/build-manifest.json")"
 }
 grep -Fxq "version=$version" "$ARTIFACT_DIR/BUILD-INFO.txt"
 grep -Fxq "source_commit=$source_sha" "$ARTIFACT_DIR/BUILD-INFO.txt"
+dependency_sha="$(sha256sum "$ARTIFACT_DIR/DEPENDENCIES.json" | awk '{ print $1 }')"
+[[ "$dependency_sha" == "$(jq -er '.dependency_lock_sha256' "$ARTIFACT_DIR/build-manifest.json")" ]] || {
+  echo "Dependency lock hash does not match the embedded build manifest." >&2; exit 1;
+}
+jq -e '.schema_version == 1 and (.dependencies | length > 0)' "$ARTIFACT_DIR/DEPENDENCIES.json" >/dev/null
 
 jq -e '.bomFormat == "CycloneDX" and (.components | length > 0)' "$ARTIFACT_DIR/sbom.cdx.json" >/dev/null
 jq -e '.source_commit == $sha and .version == $version and
@@ -115,8 +123,8 @@ jq -e '.errors == [] and .elf_count > 0' "$ARTIFACT_DIR/linux-elf-audit.json" >/
 manifest_copy_sha="$(sha256sum "$ARTIFACT_DIR/build-manifest.json" | awk '{ print $1 }')"
 sbom_sha="$(sha256sum "$ARTIFACT_DIR/sbom.cdx.json" | awk '{ print $1 }')"
 elf_report_sha="$(sha256sum "$ARTIFACT_DIR/linux-elf-audit.json" | awk '{ print $1 }')"
-jq -e --arg manifest_sha "$manifest_copy_sha" --arg sbom_sha "$sbom_sha" --arg elf_sha "$elf_report_sha" \
-  '.evidence.build_manifest.sha256 == $manifest_sha and .evidence.cyclonedx_sbom.sha256 == $sbom_sha and .evidence.elf_audit.sha256 == $elf_sha' \
+jq -e --arg manifest_sha "$manifest_copy_sha" --arg sbom_sha "$sbom_sha" --arg dep_sha "$dependency_sha" --arg elf_sha "$elf_report_sha" \
+  '.evidence.build_manifest.sha256 == $manifest_sha and .evidence.cyclonedx_sbom.sha256 == $sbom_sha and .evidence.dependency_lock.sha256 == $dep_sha and .evidence.elf_audit.sha256 == $elf_sha' \
   "$ARTIFACT_DIR/build-manifest-release.json" >/dev/null
 
 # Test the actual AppImage code path with no write access to the repository. --version avoids SDL/GPU
