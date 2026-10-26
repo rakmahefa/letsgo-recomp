@@ -210,9 +210,11 @@ jobs:
           test -x "$bindir/LetsGoRecomp"
           test -x "$bindir/lasgen/lasgen"
           test -x "$bindir/zig/zig"
-          for resource in cpu.h simd.h simd_fp.h gamelib.h gamelib_entry.c hle_symbols.txt; do
+          # hle_symbols.txt is an intentionally empty placeholder in this source tree.
+          for resource in cpu.h simd.h simd_fp.h gamelib.h gamelib_entry.c; do
             test -s "$bindir/gamelib-src/$resource"
           done
+          test -f "$bindir/gamelib-src/hle_symbols.txt"
           for notice in LICENSE.txt LICENSE-LASRecomp.txt Baloo2-OFL.txt; do
             test -s "$bindir/$notice"
           done
