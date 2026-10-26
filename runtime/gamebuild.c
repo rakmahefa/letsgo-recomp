@@ -8,6 +8,10 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#ifdef __linux__
+#include <errno.h>
+#endif
+
 #include "gamelib.h"
 #include "paths.h"
 #include "platform.h"
@@ -302,6 +306,30 @@ static bool start_generator(Gen *g, const Tools *t, const char *game_dir, const 
     return true;
 }
 
+// Approximate sampled RSS for a direct child. This is diagnostic only; the 50 ms scheduler
+// cadence means short peaks can be missed. Non-Linux platforms don't expose a portable equivalent.
+static unsigned long long process_rss_kib(PlatProc p) {
+#ifdef __linux__
+    if (p <= 0) return 0;
+    char path[96], line[256];
+    snprintf(path, sizeof path, "/proc/%ld/status", (long)p);
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+    unsigned long long rss = 0;
+    while (fgets(line, sizeof line, f)) {
+        if (!strncmp(line, "VmRSS:", 6)) {
+            if (sscanf(line + 6, "%llu", &rss) != 1) rss = 0;
+            break;
+        }
+    }
+    fclose(f);
+    return rss;
+#else
+    (void)p;
+    return 0;
+#endif
+}
+
 // ------------------------------------------------------------------ the build
 bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size_t why_size) {
     uint64_t t0 = plat_now_ns();
@@ -352,6 +380,8 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
     uint64_t compile_t0 = 0, compile_last_ns = 0, compile_child_ns = 0;
     unsigned long long done_bytes = 0, compiled_bytes = 0;
     int compiled_objects = 0;
+    int peak_direct_children = 0;
+    unsigned long long peak_direct_child_rss_kib = 0;
     double shown = 0;
     add_unit(&units, t.entry, work, "gamelib_entry");
     while (next_gen < NGEN && active_gen < gen_slots && active_gen + nrun < budget) {
@@ -451,6 +481,22 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
             run[k--] = run[--nrun];
         }
         if (!ok) break;
+
+        int direct_children = 0;
+        unsigned long long direct_child_rss_kib = 0;
+        for (int i = 0; i < NGEN; i++) {
+            if (gens[i].started && gens[i].exit < 0 && gens[i].p) {
+                direct_children++;
+                direct_child_rss_kib += process_rss_kib(gens[i].p);
+            }
+        }
+        for (int k = 0; k < nrun; k++) {
+            direct_children++;
+            direct_child_rss_kib += process_rss_kib(run[k].p);
+        }
+        if (direct_children > peak_direct_children) peak_direct_children = direct_children;
+        if (direct_child_rss_kib > peak_direct_child_rss_kib)
+            peak_direct_child_rss_kib = direct_child_rss_kib;
         if (gens_done && next_unit == units.n && nrun == 0) break;
 
         // progress: the generator's share (its functions written), the compiler's (bytes of C compiled, of an
@@ -469,6 +515,12 @@ bool gamebuild_run(const char *game_dir, const GameBuildOpts *o, char *why, size
     for (int i = 0; i < NGEN; i++)
         if (gens[i].started && gens[i].p && gens[i].exit < 0) stop(gens[i].p);
 
+#ifdef __linux__
+    LOG("[gamebuild] process_peaks direct_children=%d direct_child_rss_kib=%llu sampled=true (50ms cadence; child RSS excludes descendants)\n",
+        peak_direct_children, peak_direct_child_rss_kib);
+#else
+    LOG("[gamebuild] process_peaks direct_children=%d direct_child_rss_kib=unavailable\n", peak_direct_children);
+#endif
     if (compile_t0)
         LOG("[gamebuild] compile_objects=%d compiled_c_bytes=%llu compile_child_ms=%llu compile_wall_ms=%llu\n",
             compiled_objects, compiled_bytes, (unsigned long long)(compile_child_ns / 1000000ull),
