@@ -44,6 +44,7 @@ struct KThread {
     // debug (LARECOMP_THREAD_DUMP): the svc this thread is in, -1 when running guest / host code
     volatile int cur_svc;
     uint64_t cur_svc_pc, cur_svc_args[4];
+    uint64_t woken_ns;     // (LARECOMP_PROF_CONDVAR: when a waker last released it)
 };
 
 typedef struct KSharedMem {

@@ -11,6 +11,8 @@ then per variant the median of the runs' medians with min-max, and for two varia
 interval over the runs. A ratio whose interval contains 1.0 is not a result.
 """
 import argparse
+import ctypes
+import ctypes.wintypes as W
 import os
 import random
 import statistics
@@ -22,6 +24,29 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASE = "400:A:6,500:A:6,1150:A:6,1300:A:6"
 ROUTE = BASE + ",1400:STICK_RIGHT:150,1560:STICK_DOWN:120,1690:STICK_RIGHT:120,1820:STICK_UP:150,1980:STICK_LEFT:100,2090:RSTICK_LEFT:90,2190:RSTICK_RIGHT:90"
 FROM, TO = 1420, 2300
+
+
+def bring_to_front():
+    """The game's window topmost and in the foreground. Behind another window (or smaller than the screen) Windows composes it
+    (DWM) instead of showing it directly, and the unlimited frame rate drops ~20-35% in Viridian City (HISTORICO): with the
+    window left where it opens, runs of the same build came out bimodal. Returns whether the window was found."""
+    u32 = ctypes.WinDLL("user32")
+    found = []
+
+    @ctypes.WINFUNCTYPE(W.BOOL, W.HWND, W.LPARAM)
+    def cb(h, _):
+        title = ctypes.create_unicode_buffer(256)
+        u32.GetWindowTextW(h, title, 256)
+        if u32.IsWindowVisible(h) and "Let's Go" in title.value:
+            found.append(h)
+        return True
+    u32.EnumWindows(cb, 0)
+    for h in found:
+        u32.SetWindowPos(h, -1, 0, 0, 0, 0, 0x0001 | 0x0002)  # HWND_TOPMOST, keeping its size and place
+        u32.keybd_event(0x12, 0, 0, 0)  # (an Alt tap lets SetForegroundWindow through)
+        u32.keybd_event(0x12, 0, 2, 0)
+        u32.SetForegroundWindow(h)
+    return bool(found)
 
 
 def run_once(game, mode, env_extra, tag):
@@ -50,9 +75,11 @@ def run_once(game, mode, env_extra, tag):
     with open(log, "w") as lf:
         p = subprocess.Popen([exe, root, "--play"], cwd=ROOT, env=env, stdout=lf, stderr=subprocess.STDOUT)
         t0 = time.time()
-        done = False
+        done = fronted = False
         while time.time() - t0 < 400:
             time.sleep(1)
+            if not fronted:
+                fronted = bring_to_front()
             with open(log, errors="replace") as r:
                 txt = r.read()
             if "exit at present" in txt or "FATAL" in txt:

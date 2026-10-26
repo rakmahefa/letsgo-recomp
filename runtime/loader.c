@@ -185,4 +185,14 @@ void loader_load(const char *exefs) {
         load_nso(m, path, mods[i].base);
     }
     for (int i = 0; i < g_nmodules; i++) relocate(&g_modules[i]);
+    // LARECOMP_IMAGE_DUMP=<file> (research): the main module as loaded and relocated, for tools that read the image
+    // without decompressing the NSO (the script natives' table, strings)
+    const char *dump = getenv("LARECOMP_IMAGE_DUMP");
+    if (dump && g_nmodules) {
+        FILE *f = fopen(dump, "wb");
+        if (f) {
+            fwrite((const void *)(uintptr_t)g_modules[0].base, 1, g_modules[0].size, f);
+            fclose(f);
+        }
+    }
 }

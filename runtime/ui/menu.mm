@@ -8,12 +8,14 @@
 // Threads: SDL events arrive on the main thread and are queued; the overlay is laid out and drawn on the render
 // thread inside backend_present, after the game image, into the same window image.
 #include <SDL3/SDL.h>
+#include <float.h>
 #include <math.h>
 #include <pthread.h>
 #include <atomic>
 #include <vector>
 
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "imgui_impl_vulkan.h"
 #include "osk.h"
 #include "settings_ui.h"
@@ -21,6 +23,7 @@ extern "C" bool vk_imgui_backend_init(void);  // runtime/nvn/vulkan/imgui_glue.c
 
 extern "C" {
 #include "../hle.h"
+#include "../input_bind.h"
 #include "../settings.h"
 #include "menu.h"
 #include "../paths.h"
@@ -37,6 +40,10 @@ bool input_finger_cursor(float *x, float *y, bool *down);  // runtime/hle/input.
 static std::atomic<bool> g_open{false};  // the "close the game?" question is up
 static std::atomic<bool> g_cfg{false};   // the F12 settings are up
 static int g_cfg_tab;                    // the F12 settings' tab: graphics, image and sound, advanced (render thread)
+// Ctrl (the controller's top face button: Y on Xbox, X on Nintendo) in the F12 settings: half the size, in the bottom
+// right corner, no darkening of the game - to tune the effects seeing most of the image. Hidden: not in the prompts.
+// (LARECOMP_MENU_SMALL=1: so from the start, for screenshots)
+static bool g_cfg_small = getenv("LARECOMP_MENU_SMALL") != NULL;
 static std::atomic<bool> g_want_fullscreen_apply{false};
 
 struct QEvent {
@@ -77,7 +84,6 @@ extern "C" void menu_test_open(void) {
     const char *pg = getenv("LARECOMP_MENU_PAGE");
     if (!pg) { set_open(true); return; }
     g_cfg_tab = !strcmp(pg, "adv") ? 2 : atoi(pg);
-    ui_tab_select(g_cfg_tab);
     set_cfg(true);
 }
 
@@ -108,11 +114,13 @@ static ImGuiKey key_from_scancode(SDL_Scancode sc) {
     }
 }
 
-// Nintendo layout: the right face button (A) confirms, the bottom one (B) goes back.
+// A confirms, B goes back, as in the game: by the controller layout (runtime/hle/bindings.c) - Nintendo: A the right
+// face button, B the bottom one; Xbox: A the bottom one, B the right one.
 static ImGuiKey key_from_pad(Uint8 b) {
+    bool xbox = bind_layout() == BIND_LAYOUT_XBOX;
     switch (b) {
-    case SDL_GAMEPAD_BUTTON_EAST: return ImGuiKey_GamepadFaceDown;   // activate
-    case SDL_GAMEPAD_BUTTON_SOUTH: return ImGuiKey_GamepadFaceRight; // cancel / back
+    case SDL_GAMEPAD_BUTTON_EAST: return xbox ? ImGuiKey_GamepadFaceRight : ImGuiKey_GamepadFaceDown;   // activate (Nintendo)
+    case SDL_GAMEPAD_BUTTON_SOUTH: return xbox ? ImGuiKey_GamepadFaceDown : ImGuiKey_GamepadFaceRight;  // cancel / back (Nintendo)
     case SDL_GAMEPAD_BUTTON_NORTH: return ImGuiKey_GamepadFaceUp;
     case SDL_GAMEPAD_BUTTON_WEST: return ImGuiKey_GamepadFaceLeft;
     case SDL_GAMEPAD_BUTTON_DPAD_UP: return ImGuiKey_GamepadDpadUp;
@@ -263,11 +271,10 @@ void menu_apply_window_requests(void *win) {
         else SDL_StopTextInput(w);
         text_input = want_text;
     }
-    static bool first = true;
-    if (first || g_want_fullscreen_apply.exchange(false)) {
-        first = false;
-        SDL_SetWindowFullscreen(w, g_settings.fullscreen);
-    }
+    // F11 / Alt+Enter only: the setting itself is applied where the window is made (ui_window_init) and handed to the game
+    // (runtime/ui/launcher_lg.mm window_as_game) - applied here on the first call too, the start screen (which calls this
+    // each frame) went back to full screen right after taking its own size
+    if (g_want_fullscreen_apply.exchange(false)) SDL_SetWindowFullscreen(w, g_settings.fullscreen);
 }
 
 // ------------------------------------------------------------------ render thread
@@ -288,6 +295,7 @@ static void init(void) {
     UiFonts f = ui_load_fonts();
     g_font = f.body, g_font_big = f.big, g_menu_font = f.title;
     ui_style();
+    g_ui_tips_in_box = true;  // (the settings show the descriptions in their box)
     vk_imgui_backend_init();
     g_inited = true;
 }
@@ -325,10 +333,13 @@ static void keyboard_draw(ImGuiIO &io, float scale) {
     float w = fminf(io.DisplaySize.x * 0.9f, 1100 * scale);
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(w, 0), ImGuiCond_Always);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, 0);
     ImGui::Begin("##kbd", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                                     ImGuiWindowFlags_AlwaysAutoResize);
+    ImGui::PopStyleColor();
+    ui_window_backdrop();
     ImGui::PushFont(g_font_big);
-    ImGui::TextColored(ImVec4(0.93f, 0.76f, 0.33f, 1), "%s", M("Enter a name", "Digite o nome", "Введите имя"));
+    ImGui::TextColored(UI_TEXT, "%s", M("Enter a name", "Digite o nome", "Введите имя"));
     ImGui::PopFont();
     static bool was_open, was_pad;
     bool pad = g_last_pad.load(), appearing = !was_open || pad != was_pad;  // (switching device: focus the new one)
@@ -380,8 +391,11 @@ extern "C" int menu_keyboard_run(const char *initial, int max_len, char *out, in
 static void quit_draw(ImGuiIO &io, float scale) {
     ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), io.DisplaySize, IM_COL32(0, 0, 0, 110));
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, 0);
     ImGui::Begin("##quit", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                                      ImGuiWindowFlags_AlwaysAutoResize);
+    ImGui::PopStyleColor();
+    ui_window_backdrop();
     ui_title(g_menu_font, M("Close the game?", "Deseja fechar o jogo?", "Закрыть игру?"));
     const char *lost = M("Progress since the last save will be lost.", "O progresso desde o último save será perdido.",
                          "Прогресс после последнего сохранения будет потерян.");
@@ -409,40 +423,152 @@ static void quit_draw(ImGuiIO &io, float scale) {
     ImGui::End();
 }
 
+// A button prompt as in the game's bottom strip: the button (a coloured circle with its letter, or a key's name on a
+// pill) then what it does, from x on the line centred at y. Returns its width; draw = false only measures it.
+static float prompt(ImDrawList *dl, float x, float y, const char *key, ImU32 col, const char *text, bool draw) {
+    float h = ImGui::GetFrameHeight() * 0.78f, gap = h * 0.25f;
+    ImVec2 ks = ImGui::CalcTextSize(key), ts = ImGui::CalcTextSize(text);
+    float kw = strlen(key) == 1 ? h : ks.x + h * 0.7f;
+    if (draw) {
+        ImVec2 a(x, y - h * 0.5f), b(x + kw, y + h * 0.5f);
+        dl->AddRectFilled(a, b, col, h * 0.5f);
+        dl->AddRect(a, b, IM_COL32(255, 255, 255, 255), h * 0.5f, 0, h * 0.07f);
+        dl->AddText(ImVec2(x + (kw - ks.x) * 0.5f, y - ks.y * 0.5f), IM_COL32(255, 255, 255, 255), key);
+        dl->AddText(ImVec2(x + kw + gap, y - ts.y * 0.5f), ImGui::GetColorU32(ImGuiCol_Text), text);
+    }
+    return kw + gap + ts.x;
+}
+
+// The description box: the text of the setting under the cursor (ui_tip), else the page's, on the rows' text column
+// with as much room above it as at its left; at the text's size unless it is longer than the box (smaller then)
+static void description(ImDrawList *dl, ImVec2 a, ImVec2 b, float pad_y, const char *text) {
+    ui_info_box(dl, a, b);
+    float in = ui_inset(), ww = b.x - a.x - in * 2, hh = b.y - a.y - pad_y * 2;
+    ImFont *font = ImGui::GetFont();
+    float size = ImGui::GetFontSize();
+    for (float f = 1.0f; f >= 0.6f; f -= 0.05f) {
+        size = ImGui::GetFontSize() * f;
+        if (font->CalcTextSizeA(size, FLT_MAX, ww, text).y <= hh) break;
+    }
+    dl->AddText(font, size, ImVec2(a.x + in, a.y + pad_y), ImGui::GetColorU32(ImGuiCol_Text), text, NULL, ww);
+}
+
 // F12: the settings, applied live (runtime/ui/settings_ui.mm: the start screen's pages); saved to larecomp.ini on closing.
-// B / Esc / F12 close; L / R on a controller change the tab.
+// B / Esc / F12 close; L / R on a controller change the tab. The look of the game's Options screen: the title and the
+// tabs, the description box, the settings as pills, the button prompts on a white strip at the bottom.
 static void cfg_draw(ImGuiIO &io, float scale) {
-    ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), io.DisplaySize, IM_COL32(0, 0, 0, 70));
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    // one size for every tab, as the start screen's window (a page taller than it scrolls; pad navigation follows)
-    float ww = fminf(io.DisplaySize.x * 0.9f, 1000 * scale), wh = fminf(io.DisplaySize.y * 0.92f, 780 * scale);
+    // (small: scale is already half the window's - menu_render; the margin a fortieth of the window's height)
+    float margin = roundf(io.DisplaySize.y * 0.025f);
+    if (!g_cfg_small) {
+        ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), io.DisplaySize, IM_COL32(0, 0, 0, 70));
+        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    } else {
+        ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - margin, io.DisplaySize.y - margin), ImGuiCond_Always, ImVec2(1, 1));
+    }
+    // one size for every tab (a page taller than it scrolls; pad navigation follows)
+    float ww = fminf(io.DisplaySize.x * 0.92f, 1120 * scale), wh = fminf(io.DisplaySize.y * 0.92f, 900 * scale);
+    if (g_cfg_small) ww = fminf(ww, io.DisplaySize.x * 0.5f - margin), wh = fminf(wh, io.DisplaySize.y * 0.5f - margin);
     ImGui::SetNextWindowSize(ImVec2(ww, wh), ImGuiCond_Always);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, 0);
     ImGui::Begin("##cfg", NULL, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
                                     ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
+    ImGui::PopStyleColor();
+    ui_window_backdrop();
+    const ImGuiStyle &st = ImGui::GetStyle();
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
+    float fh = ImGui::GetFrameHeight();
+    bool popup = ImGui::IsPopupOpen((const char *)NULL, ImGuiPopupFlags_AnyPopupId);
+
+    // the title, and the tabs at its right as pills between L and R (a click picks one too)
     ui_title(g_menu_font, M("Settings", "Configurações", "Настройки"));
-    bool known = rt_addr(0x70002f8bb0ull) != 0;
-    float footer = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.y * 2 + ImGui::GetStyle().WindowPadding.y * 0.5f;
-    ui_tabs_begin(&g_cfg_tab, 3);
-    if (ImGui::BeginTabBar("##cfg_tabs")) {
+    ImVec2 t0 = ImGui::GetItemRectMin(), t1 = ImGui::GetItemRectMax();
+    if (!popup) ui_tabs_begin(&g_cfg_tab, 3);
+    {
         const char *names[] = {M("Graphics", "Gráficos", "Графика"), M("Image and sound", "Imagem e som", "Изображение и звук"),
                                M("Advanced", "Avançado", "Дополнительно")};
+        float pad = fh * 0.55f, gap = st.ItemSpacing.x, chip = fh * 0.95f, w[3], total = chip * 2 + gap * 4;
+        for (int t = 0; t < 3; t++) total += w[t] = ImGui::CalcTextSize(names[t]).x + pad * 2;
+        float x = wp.x + ws.x - st.WindowPadding.x - total, y = (t0.y + t1.y) * 0.5f;
+        auto shoulder = [&](float cx, const char *k) {  // L / R: a dark rounded chip
+            ImVec2 a(cx, y - fh * 0.36f), b(cx + chip, y + fh * 0.36f), ks = ImGui::CalcTextSize(k);
+            dl->AddRectFilled(a, b, IM_COL32(70, 76, 66, 255), fh * 0.2f);
+            dl->AddText(ImVec2(cx + (chip - ks.x) * 0.5f, y - ks.y * 0.5f), IM_COL32(255, 255, 255, 255), k);
+        };
+        shoulder(x, "L");
+        x += chip + gap;
+        ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);
         for (int t = 0; t < 3; t++) {
-            if (!ui_tab(names[t], t, &g_cfg_tab)) continue;
-            ImGui::BeginChild("##page", ImVec2(0, -footer), ImGuiChildFlags_NavFlattened);
-            if (t == 0) ui_page_graphics(ui_graphics_x(NULL, 0), known);
-            else if (t == 1) ui_page_image_sound();
-            else ui_page_advanced();
-            ImGui::EndChild();
-            ImGui::EndTabItem();
+            ImVec2 a(x, y - fh * 0.5f), b(x + w[t], y + fh * 0.5f);
+            ImGui::SetCursorScreenPos(a);
+            ImGui::PushID(t);
+            if (ImGui::InvisibleButton("##tab", ImVec2(w[t], fh))) g_cfg_tab = t;
+            ImGui::PopID();
+            bool sel = g_cfg_tab == t;
+            ui_pill(dl, a, b, sel);
+            if (!sel && ImGui::IsItemHovered()) dl->AddRect(a, b, ImGui::GetColorU32(ImGuiCol_Border), fh * 0.5f, 0, 2.5f * scale);
+            ImVec2 ts = ImGui::CalcTextSize(names[t]);
+            dl->AddText(ImVec2(a.x + (w[t] - ts.x) * 0.5f, y - ts.y * 0.5f), ImGui::GetColorU32(sel ? ImGuiCol_Text : ImGuiCol_TextDisabled), names[t]);
+            x += w[t] + gap;
         }
-        ImGui::EndTabBar();
+        ImGui::PopItemFlag();
+        shoulder(x, "R");  // (the row ends on the box's right edge)
+        ImGui::SetCursorScreenPos(ImVec2(t0.x, fmaxf(t1.y, y + fh * 0.5f) + 16 * scale));
     }
-    ImGui::Separator();
-    bool close = ImGui::Button(M("Close", "Fechar", "Закрыть"), ImVec2(240 * scale, 0)) ||
-                 (!ImGui::IsPopupOpen(NULL, ImGuiPopupFlags_AnyPopupId) && ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false));
-    ImGui::SameLine();
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextDisabled("%s", M("F12 or Esc closes; L / R change the tab", "F12 ou Esc fecha; L / R trocam de aba", "F12 или Esc — закрыть; L / R — вкладки"));
+
+    // the description box: two lines of text
+    {
+        float pad_y = ui_inset() * 0.75f;
+        ImVec2 a = ImGui::GetCursorScreenPos(), b(wp.x + ws.x - st.WindowPadding.x, a.y + ImGui::GetTextLineHeight() * 2 + pad_y * 2);
+        const char *d = ui_tip_last();
+        description(dl, a, b, pad_y, d ? d : M("Changes apply at once and are saved when this menu closes. Left / right change the highlighted setting.",
+                                        "As mudanças valem na hora e são salvas ao fechar este menu. Esquerda / direita mudam a opção destacada.",
+                                        "Изменения применяются сразу и сохраняются при закрытии меню. Влево / вправо — изменить выбранный параметр."));
+        ImGui::Dummy(ImVec2(b.x - a.x, b.y - a.y + 16 * scale - st.ItemSpacing.y));  // (16 px to the page, as above the box)
+    }
+
+    // the page, above the strip at the bottom: as wide as the box (the cursor's arrow in the window's margin)
+    float strip = fh * 1.45f, page_h = wp.y + ws.y - strip - st.ItemSpacing.y - ImGui::GetCursorScreenPos().y;
+    bool known = rt_addr(0x70002f8bb0ull) != 0;
+    ImGui::PushID(g_cfg_tab);  // (each page its own scroll)
+    ui_page_begin("##page", ImVec2(0, page_h));
+    static int shown = -1;  // (another page: the cursor on its first setting)
+    if (shown != g_cfg_tab && shown >= 0 && GImGui->NavCursorVisible) ImGui::SetKeyboardFocusHere();
+    shown = g_cfg_tab;
+    if (g_cfg_tab == 0) ui_page_graphics(ui_graphics_x(NULL, 0), known);
+    else if (g_cfg_tab == 1) ui_page_image_sound();
+    else ui_page_advanced();
+    ui_page_end();
+    ImGui::PopID();
+
+    // the strip: L / R change the tab, B closes (Esc / F12 on a keyboard); a click on Close closes too
+    bool close = !popup && ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false);
+    if (!popup && (ImGui::IsKeyPressed(ImGuiKey_LeftCtrl, false) || ImGui::IsKeyPressed(ImGuiKey_RightCtrl, false) ||
+                   ImGui::IsKeyPressed(ImGuiKey_GamepadFaceUp, false)))
+        g_cfg_small = !g_cfg_small;
+    {
+        ImVec2 a(wp.x, wp.y + ws.y - strip), b(wp.x + ws.x, wp.y + ws.y);
+        dl->AddRectFilled(a, b, IM_COL32(255, 255, 255, 245), st.WindowRounding, ImDrawFlags_RoundCornersBottom);
+        float y = (a.y + b.y) * 0.5f, x = b.x - st.WindowPadding.x, sp = fh * 0.7f;
+        bool pad = g_last_pad.load();
+        const char *l_close = M("Close", "Fechar", "Закрыть"), *l_tab = M("Tabs", "Abas", "Вкладки");
+        char k_close[48];
+        snprintf(k_close, sizeof k_close, pad ? "B" : "Esc / %s", SDL_GetScancodeName(cfg_key()));
+        ImU32 orange = IM_COL32(240, 160, 36, 255), grey = IM_COL32(70, 76, 66, 255);
+        float wc = prompt(dl, 0, 0, k_close, orange, l_close, false);
+        x -= wc;
+        prompt(dl, x, y, k_close, pad ? orange : grey, l_close, true);
+        ImGui::SetCursorScreenPos(ImVec2(x, y - fh * 0.5f));
+        ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);
+        if (ImGui::InvisibleButton("##close", ImVec2(wc, fh))) close = true;
+        ImGui::PopItemFlag();
+        if (pad) {  // (L R  Tabs)
+            float wl = prompt(dl, 0, 0, "L", grey, "", false), wt = wl + prompt(dl, 0, 0, "R", grey, l_tab, false);
+            x -= sp + wt;
+            prompt(dl, x, y, "L", grey, "", true);
+            prompt(dl, x + wl, y, "R", grey, l_tab, true);
+        }
+    }
     ImGui::End();
     if (close) set_cfg(false);
 }
@@ -467,17 +593,21 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
     drain_events(io);
     // fonts are built for a ~1080 px tall output; scale to the window (spacing / rounding too)
     static UiScaler scaler;
-    float scale = ui_scale(scaler, (float)target_h);
+    float scale = ui_scale(scaler, (float)target_h * (cfg && !open && g_cfg_small ? 0.5f : 1.0f));
     ImGui_ImplVulkan_NewFrame();
     ImGui::NewFrame();
 
     if (g_settings.show_fps) {
         ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 16 * scale, 16 * scale), 0, ImVec2(1, 0));
-        ImGui::SetNextWindowBgAlpha(0.5f);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0.5f));  // (dark: over the game, not the menus' look)
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10 * scale);
         ImGui::Begin("##fps", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                                         ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing);
         ImGui::Text("%.0f fps", io.Framerate);
         ImGui::End();
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor(2);
     }
     if (finger) {  // the controller's finger on the touch screen (right stick moves it, ZR touches)
         ImDrawList *dl = ImGui::GetForegroundDrawList();
@@ -488,6 +618,7 @@ void menu_render(void *cmd, uint32_t target_w, uint32_t target_h) {
     if (open) quit_draw(io, scale);
     else if (cfg && !kbd) cfg_draw(io, scale);
     if (kbd) keyboard_draw(io, scale);
+    ui_frame_end();
     ImGui::Render();
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), (VkCommandBuffer)cmd);  // inside the window image's rendering
 }

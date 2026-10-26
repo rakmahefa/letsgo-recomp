@@ -19,6 +19,7 @@
 #include <string.h>
 
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "imgui_impl_vulkan.h"
 #include "imgui_impl_sdl3.h"
 #include "settings_ui.h"
@@ -77,51 +78,50 @@ static const char *key_name(int sc) {
 static void keys_section(void) {
     int cap_dev, cap_slot, ms_left;
     bind_capture_active(&cap_dev, &cap_slot, &ms_left);
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 2));
-    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(ImGui::GetStyle().CellPadding.x, 1));
-    if (ImGui::BeginTable("##keys", 2, ImGuiTableFlags_SizingStretchProp)) {
-        ImGui::TableSetupColumn(NULL, ImGuiTableColumnFlags_WidthFixed);
-        ImGui::TableSetupColumn(NULL, ImGuiTableColumnFlags_WidthStretch);
-        const size_t n = sizeof k_actions / sizeof k_actions[0];
-        for (size_t k = 0; k < n; k++) {
-            size_t i = k < n / 2 ? k * 2 : (k - n / 2) * 2 + 1;  // (the table lists them in pairs: the moves, then the buttons)
-            int slot = k_actions[i].slot;
-            ImGui::TableNextColumn();
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted(T(k_actions[i].en, k_actions[i].pt));
-            ImGui::TableNextColumn();
-            bool waiting = cap_dev == BIND_DEV_KEY && cap_slot == slot;
-            char lbl[96];
-            if (waiting) snprintf(lbl, sizeof lbl, "%s %d##k%d", T("Press a key...", "Aperte a tecla..."), (ms_left + 999) / 1000, slot);
-            else snprintf(lbl, sizeof lbl, "%s##k%d", key_name(g_bind_key[slot]), slot);
-            int pushed = 0;
-            if (waiting) { ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.42f, 0.12f, 1)); pushed++; }
-            if (!bind_is_default_slot(BIND_DEV_KEY, slot)) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.98f, 0.82f, 0.38f, 1)); pushed++; }
-            if (ImGui::Button(lbl, ImVec2(-FLT_MIN, 0))) {
-                if (waiting) bind_capture_cancel();
-                else bind_capture_begin(BIND_DEV_KEY, slot);
-            }
-            ImGui::PopStyleColor(pushed);
+    const size_t n = sizeof k_actions / sizeof k_actions[0];
+    const char *sl[] = {T("Mouse sensitivity", "Sensibilidade do mouse"), T("Controller stick dead zone", "Zona morta do analógico")};
+    const char *labels[sizeof k_actions / sizeof k_actions[0] + 2];  // (one values' column for the keys and the sliders)
+    for (size_t i = 0; i < n; i++) labels[i] = T(k_actions[i].en, k_actions[i].pt);
+    labels[n] = sl[0], labels[n + 1] = sl[1];
+    float x = ui_label_x(labels, (int)n + 2);
+    ui_heading(T("Keyboard", "Teclado"));
+    for (size_t k = 0; k < n; k++) {
+        size_t i = k < n / 2 ? k * 2 : (k - n / 2) * 2 + 1;  // (in pairs in the table: the moves, then the buttons)
+        int slot = k_actions[i].slot;
+        bool waiting = cap_dev == BIND_DEV_KEY && cap_slot == slot;
+        char txt[96];
+        if (waiting) snprintf(txt, sizeof txt, "%s %d", T("Press a key...", "Aperte a tecla..."), (ms_left + 999) / 1000);
+        else snprintf(txt, sizeof txt, "%s", key_name(g_bind_key[slot]));
+        // (waiting: green; a key changed from the default: gold)
+        ImU32 col = waiting ? ImGui::GetColorU32(UI_GREEN_TEXT) : !bind_is_default_slot(BIND_DEV_KEY, slot) ? ImGui::GetColorU32(UI_GOLD) : 0;
+        ui_row(labels[i], x);
+        ImGui::PushID(slot);
+        if (ui_value_button("##key", txt, col)) {
+            if (waiting) bind_capture_cancel();
+            else bind_capture_begin(BIND_DEV_KEY, slot);
         }
-        ImGui::EndTable();
+        ImGui::PopID();
     }
-    ImGui::PopStyleVar(2);
+    ImGui::PushTextWrapPos(0);
     if (cap_dev == BIND_DEV_KEY)
         ImGui::TextDisabled("%s", T("Press the new key. Esc cancels; a key already in use swaps over.",
                                     "Aperte a nova tecla. Esc cancela; uma tecla já usada troca de lugar."));
-    if (!bind_is_default(BIND_DEV_KEY) && ImGui::Button(T("Restore default keys", "Restaurar teclas padrão"))) bind_reset(BIND_DEV_KEY);
-    ImGui::PushTextWrapPos(0);
-    ImGui::TextUnformatted(T("Mouse while aiming a Poké Ball: move = aim, left = throw.",
-                             "Mouse na mira da Poké Ball: mover = mirar, esquerdo = arremessar."));
-    ImGui::TextUnformatted(T("Otherwise: left = touch screen (Play with your partner). Right = B.",
-                             "Fora dela: esquerdo = tocar na tela (Brincar com o parceiro). Direito = B."));
     ImGui::PopTextWrapPos();
-    const char *sl[] = {T("Mouse sensitivity", "Sensibilidade do mouse"), T("Controller stick dead zone", "Zona morta do analógico")};
-    float x = ui_label_x(sl, 2);
+    if (!bind_is_default(BIND_DEV_KEY)) {
+        ui_group_gap();
+        if (ui_button(T("Restore default keys", "Restaurar teclas padrão"))) bind_reset(BIND_DEV_KEY);
+    }
+    ui_heading(T("Mouse and controller", "Mouse e controle"));
+    ImGui::PushTextWrapPos(0);
+    ImGui::TextDisabled("%s", T("Mouse while aiming a Poké Ball: move = aim, left = throw.",
+                                "Mouse na mira da Poké Ball: mover = mirar, esquerdo = arremessar."));
+    ImGui::TextDisabled("%s", T("Otherwise: left = touch screen (Play with your partner). Right = B.",
+                                "Fora dela: esquerdo = tocar na tela (Brincar com o parceiro). Direito = B."));
+    ImGui::PopTextWrapPos();
     ui_row(sl[0], x);
-    ImGui::SliderFloat("##mouse", &g_settings.mouse_sens, 0.02f, 0.30f, "%.2f");
+    ui_slider("##mouse", &g_settings.mouse_sens, 0.02f, 0.30f, "%.2f", 0.01f);
     ui_row(sl[1], x);
-    ImGui::SliderFloat("##dead", &g_settings.stick_deadzone, 0.0f, 0.40f, "%.2f");
+    ui_slider("##dead", &g_settings.stick_deadzone, 0.0f, 0.40f, "%.2f", 0.01f);
 }
 
 // ------------------------------------------------------------------ the interface at 2x (runtime/ui2x.c)
@@ -142,13 +142,16 @@ static void ui2x_section(bool ready, bool *on) {
     if (n) {
         char label[160];
         snprintf(label, sizeof label, T("Interface images at 2x (%d)", "Imagens da interface em 2x (%d)"), n);
-        ImGui::Checkbox(label, on);
+        const char *l[] = {label};
+        ui_toggle("##ui2x", label, ui_label_x(l, 1), on);
     } else {
+        ImGui::PushTextWrapPos(0);
         ImGui::TextDisabled("%s", T("The game's menu and interface images, redrawn at twice their resolution.",
                                     "As imagens dos menus e da interface do jogo, redesenhadas no dobro da resolução."));
+        ImGui::PopTextWrapPos();
     }
     ImGui::BeginDisabled(!ready);
-    if (ImGui::SmallButton(n ? T("Make them again", "Gerar de novo") : T("Make the 2x images", "Gerar as imagens em 2x"))) ui2x_generate_start();
+    if (ui_button(n ? T("Make them again", "Gerar de novo") : T("Make the 2x images", "Gerar as imagens em 2x"))) ui2x_generate_start();
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("%s", !ready ? T("Set up the game files first.", "Configure os arquivos do jogo antes.")
@@ -161,8 +164,9 @@ static void ui2x_section(bool ready, bool *on) {
         static const char *const pt[] = {"Não foi possível baixar o ampliador: confira a conexão.",
                                          "O ampliador falhou (detalhes no lasrecomp.log): tente de novo.",
                                          "Não foi possível ler os arquivos do jogo ou gravar em cache/."};
-        ImGui::SameLine();
-        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.40f, 1), "%s", (g_pt ? pt : en)[st - UI2X_FAIL_DOWNLOAD]);
+        ImGui::PushTextWrapPos(0);
+        ImGui::TextColored(UI_RED_TEXT, "%s", (g_pt ? pt : en)[st - UI2X_FAIL_DOWNLOAD]);
+        ImGui::PopTextWrapPos();
     }
 }
 
@@ -213,33 +217,38 @@ static void game_files_section(SDL_Window *win) {
         const char *name = game_name("extracted/exefs");
         ImGui::TextColored(k_green, g_pt ? "Pokémon: Let's Go, %s! - pronto para jogar" : "Pokémon: Let's Go, %s! - ready to play",
                            name ? name : "Eevee");
-        ImGui::SameLine();
-        if (ImGui::SmallButton(T("Change...", "Trocar..."))) SDL_ShowOpenFolderDialog(picked_game, NULL, win, NULL, false);
+        if (ui_button(T("Change folder...", "Trocar pasta..."))) SDL_ShowOpenFolderDialog(picked_game, NULL, win, NULL, false);
         return;
     }
     if (st >= SETUP_FAIL_NOT_FOUND) {
         static const char *const en[] = {"No game files found in that folder.", "Those are packed game files (.xci / .nsp).",
                                          "That's not Pokémon: Let's Go, Eevee! or Pikachu!.", "The files couldn't be copied.",
-                                         "The game code didn't build.", "The game code builder is missing from this copy."};
+                                         "The game code didn't build.", "The game code builder is missing from this copy.",
+                                         "The game's data image (romfs.bin) can't be read."};
         static const char *const pt[] = {"Nenhum arquivo do jogo nessa pasta.", "Esses são arquivos do jogo empacotados (.xci / .nsp).",
                                          "Isso não é o Pokémon: Let's Go, Eevee! nem o Pikachu!.", "Os arquivos não puderam ser copiados.",
-                                         "O código do jogo não compilou.", "O compilador do código do jogo não está nesta cópia."};
+                                         "O código do jogo não compilou.", "O compilador do código do jogo não está nesta cópia.",
+                                         "A imagem de dados do jogo (romfs.bin) não pode ser lida."};
         static const char *const en_h[] = {"Choose the folder that holds exefs and romfs.", "Extract them first (exefs and romfs).",
                                            "Pick the folder of your own extracted Let's Go, Eevee! or Pikachu!.", "Check there are about 6 GB free and try again.",
-                                           "Check there are about 2 GB free and try again; details in lasrecomp.log.", "Download the release again."};
+                                           "Check there are about 2 GB free and try again; details in lasrecomp.log.", "Download the release again.",
+                                           "Pick the folder with the romfs folder itself (not a romfs.bin from another tool); details in lasrecomp.log."};
         static const char *const pt_h[] = {"Escolha a pasta que tem exefs e romfs.", "Extraia antes (exefs e romfs).",
                                            "Escolha a pasta do seu Let's Go, Eevee! ou Pikachu! extraído.", "Confira se há uns 6 GB livres e tente de novo.",
-                                           "Confira se há uns 2 GB livres e tente de novo; detalhes no lasrecomp.log.", "Baixe a release de novo."};
+                                           "Confira se há uns 2 GB livres e tente de novo; detalhes no lasrecomp.log.", "Baixe a release de novo.",
+                                           "Escolha a pasta com a própria pasta romfs (não um romfs.bin de outra ferramenta); detalhes no lasrecomp.log."};
         int k = st - SETUP_FAIL_NOT_FOUND;
         ImGui::TextColored(k_red, "%s", T(en[k], pt[k]));
+        ImGui::PushTextWrapPos(0);  // (the longer hints wrap instead of running past the page)
         ImGui::TextDisabled("%s", T(en_h[k], pt_h[k]));
+        ImGui::PopTextWrapPos();
     } else {
         ImGui::PushTextWrapPos(0);
         ImGui::TextUnformatted(T("Select the folder with your own extracted Pokémon: Let's Go, Eevee! or Pikachu! (exefs and romfs).",
                                  "Selecione a pasta com o seu Pokémon: Let's Go, Eevee! ou Pikachu! extraído (exefs e romfs)."));
         ImGui::PopTextWrapPos();
     }
-    if (ImGui::Button(T("Select game folder...", "Selecionar pasta do jogo..."), ImVec2(-FLT_MIN, 0)))
+    if (ui_button(T("Select game folder...", "Selecionar pasta do jogo..."), -1))
         SDL_ShowOpenFolderDialog(picked_game, NULL, win, NULL, false);
 }
 
@@ -296,28 +305,49 @@ static void mods_section(SDL_Window *win, int inst) {
     ImGui::PopTextWrapPos();
     ui_heading(T("Mods", "Mods"));
     ImGui::PushTextWrapPos(0);
-    ImGui::TextDisabled("%s", T("Tick the ones to use (several at once). Where two change the same file, the higher one wins: the arrows move it.",
-                                "Marque os que vão ser usados (vários ao mesmo tempo). Se dois trocam o mesmo arquivo, vale o de cima: as setas mudam a ordem."));
+    ImGui::TextDisabled("%s", T("Turn on the ones to use (several at once). Where two change the same file, the higher one wins: the arrows move it.",
+                                "Ligue os que vão ser usados (vários ao mesmo tempo). Se dois trocam o mesmo arquivo, vale o de cima: as setas mudam a ordem."));
     ImGui::PopTextWrapPos();
+    // each mod a row: its name (cut short with "..." when long: the whole of it in the tip), an on / off switch and the
+    // arrows that move it up / down at the row's right end (bare on the pill; a circle under the mouse)
     int move = -1, dir = 0;
+    ImGui::PushStyleColor(ImGuiCol_Button, 0);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0);
     for (int i = 0; i < g_nmods; i++) {
         ImGui::PushID(i);
+        ui_pill_row();
+        ImGuiWindow *w = ImGui::GetCurrentWindow();
+        ImDrawList *dl = w->DrawList;
+        float h = ImGui::GetFrameHeight(), sp = ImGui::GetStyle().ItemSpacing.x, gap = sp * 0.5f, sw = h * 1.45f;
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        float end = w->WorkRect.Max.x - ui_inset() * 0.6f, ax = end - h * 2 - gap, sx = ax - sp - sw, nmax = sx - sp * 1.5f;
+        ImVec2 ts = ImGui::CalcTextSize(g_mods[i]);
+        float ty = p.y + (h - ts.y) * 0.5f;
+        ImGui::RenderTextEllipsis(dl, ImVec2(p.x, ty), ImVec2(nmax, ty + ts.y), nmax, nmax, g_mods[i], NULL, &ts);
+        // the switch: green with the knob at the right when on
+        ImGui::SetCursorScreenPos(ImVec2(sx, p.y));
+        if (ImGui::InvisibleButton("##on", ImVec2(sw, h))) g_mod_on[i] = !g_mod_on[i];
+        const char *lang = mod_language(g_mods[i]);
+        char tip[320];
+        if (lang) snprintf(tip, sizeof tip, g_pt ? "%s: troca os textos em %s." : "%s: replaces the %s texts.", g_mods[i], lang_name(lang));
+        else snprintf(tip, sizeof tip, "%s", g_mods[i]);
+        ui_tip(tip);
+        float th = h * 0.62f, cy = p.y + h * 0.5f, kr = th * 0.5f - 3 * g_scale, kx = g_mod_on[i] ? sx + sw - th * 0.5f : sx + th * 0.5f;
+        dl->AddRectFilled(ImVec2(sx, cy - th * 0.5f), ImVec2(sx + sw, cy + th * 0.5f),
+                          g_mod_on[i] ? ImGui::GetColorU32(ImGuiCol_PlotHistogram) : ImGui::GetColorU32(IM_COL32(200, 208, 176, 255)), th * 0.5f);
+        dl->AddCircleFilled(ImVec2(kx, cy), kr, ImGui::GetColorU32(IM_COL32_WHITE));
+        ImGui::SetCursorScreenPos(ImVec2(ax, p.y));
         ImGui::BeginDisabled(i == 0);
         if (ImGui::ArrowButton("##up", ImGuiDir_Up)) move = i, dir = -1;
         ImGui::EndDisabled();
-        ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x * 0.4f);
+        ImGui::SameLine(0, gap);
         ImGui::BeginDisabled(i == g_nmods - 1);
         if (ImGui::ArrowButton("##down", ImGuiDir_Down)) move = i, dir = 1;
         ImGui::EndDisabled();
-        ImGui::SameLine();
-        ImGui::Checkbox(g_mods[i], &g_mod_on[i]);
-        const char *lang = mod_language(g_mods[i]);
-        if (lang) {
-            ImGui::SameLine();
-            ImGui::TextDisabled(g_pt ? "(troca os textos em %s)" : "(replaces the %s texts)", lang_name(lang));
-        }
         ImGui::PopID();
     }
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
     if (move >= 0) {  // (swapped with the one above / below it)
         int j = move + dir;
         char name[128];
@@ -326,11 +356,11 @@ static void mods_section(SDL_Window *win, int inst) {
         g_mod_on[move] = g_mod_on[j], g_mod_on[j] = on;
     }
     if (!g_nmods) ImGui::TextDisabled("%s", T("No mods in the mods folder yet: the game as it is.", "Nenhum mod na pasta mods ainda: o jogo original."));
-    ImGui::Spacing();
+    ui_group_gap();
     if (inst == MOD_INSTALL_RUNNING) ImGui::TextDisabled("%s", T("Installing the mod...", "Instalando o mod..."));
-    else if (ImGui::Button(T("Install a mod...", "Instalar mod..."))) SDL_ShowOpenFileDialog(picked_mod, NULL, win, filters, 1, NULL, false);
+    else if (ui_button(T("Install a mod...", "Instalar mod..."))) SDL_ShowOpenFileDialog(picked_mod, NULL, win, filters, 1, NULL, false);
     ImGui::SameLine();
-    if (ImGui::Button(T("Open the mods folder", "Abrir a pasta de mods"))) {
+    if (ui_button(T("Open the mods folder", "Abrir a pasta de mods"))) {
         char url[1200];
         snprintf(url, sizeof url, "file:///%s", mods_dir_abs());
         for (char *c = url; *c; c++) if (*c == '\\') *c = '/';
@@ -414,8 +444,8 @@ static bool window_button(const char *id, bool close, float size) {
     bool hit = ImGui::InvisibleButton(id, ImVec2(size, size));
     ImDrawList *dl = ImGui::GetWindowDrawList();
     if (ImGui::IsItemHovered())
-        dl->AddRectFilled(p, ImVec2(p.x + size, p.y + size), close ? IM_COL32(196, 43, 28, 255) : IM_COL32(255, 255, 255, 30), size * 0.2f);
-    ImU32 col = IM_COL32(230, 228, 220, 255);
+        dl->AddRectFilled(p, ImVec2(p.x + size, p.y + size), close ? IM_COL32(196, 43, 28, 255) : IM_COL32(255, 255, 255, 150), size * 0.2f);
+    ImU32 col = close && ImGui::IsItemHovered() ? IM_COL32(255, 255, 255, 255) : IM_COL32(60, 62, 56, 255);
     float m = size * 0.34f, t = size * 0.06f > 1 ? size * 0.06f : 1;
     if (close) {
         dl->AddLine(ImVec2(p.x + m, p.y + m), ImVec2(p.x + size - m, p.y + size - m), col, t);
@@ -463,9 +493,9 @@ extern "C" void launcher_lg_run(const char *root) {
     if (keys_test && atoi(keys_test) > 0) bind_capture_begin(BIND_DEV_KEY, atoi(keys_test));
     if (getenv("LARECOMP_SETUP_DIR")) setup_start(getenv("LARECOMP_SETUP_DIR"));
     if (getenv("LARECOMP_MOD_INSTALL")) mod_install_start(getenv("LARECOMP_MOD_INSTALL"));
-    static const float bg[4] = {0.06f, 0.09f, 0.08f, 1};  // (the F12 menu's panel colour)
-    const ImVec4 side_bg(0.035f, 0.055f, 0.045f, 1), gold(0.79f, 0.64f, 0.29f, 1), gold_hover(0.88f, 0.72f, 0.34f, 1),
-        gold_text(0.17f, 0.13f, 0.03f, 1);
+    static const float bg[4] = {0.86f, 0.93f, 0.47f, 1};  // (the F12 menu's look: ui_backdrop over it)
+    const ImVec4 side_bg(1, 1, 1, 0.55f), gold(0.98f, 0.82f, 0.22f, 1), gold_hover(1.0f, 0.88f, 0.38f, 1),
+        gold_text(0.23f, 0.18f, 0.03f, 1);
 
     while (!play) {
         menu_apply_window_requests(win);
@@ -479,6 +509,13 @@ extern "C" void launcher_lg_run(const char *root) {
         }
         char path[1024];
         if (take(g_pick_game, path, sizeof path)) setup_start(path);
+        {   // a new version over set-up game files: its game code is rebuilt by itself (once: a failure shows and waits)
+            static bool rebuilt;
+            if (!rebuilt && !setup_running() && setup_needs_build()) {
+                rebuilt = true;
+                setup_start(NULL);
+            }
+        }
         if (take(g_pick_mod, path, sizeof path)) mod_install_start(path);
         static int last_install;
         int inst = mod_install_state();
@@ -528,6 +565,7 @@ extern "C" void launcher_lg_run(const char *root) {
                                              ImGuiWindowFlags_NoBringToFrontOnFocus);
         ImGui::PopStyleColor();
         ImGui::PopStyleVar(2);
+        ui_window_backdrop();
         float pad = 22 * s, side_w = 270 * s;
         g_drag_h = 70 * s, g_buttons_w = 120 * s;
 
@@ -551,14 +589,21 @@ extern "C" void launcher_lg_run(const char *root) {
                 ImGui::Dummy(ImVec2(side_w - pad * 2, block));
             }
             ImGui::TextDisabled("v" RT_APP_VERSION);
-            ImGui::Dummy(ImVec2(0, 14 * s));
-            ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, ImVec2(0, 0.5f));
+            ImGui::Spacing();
+            // the pages: pills as tall as the rows, the current one yellow, a white one under the cursor; the names on
+            // the rows' text inset
+            float row_h = ImGui::GetFrameHeight(), in = ui_inset();
             for (int t = 0; t < NTABS; t++) {
-                char label[64];
-                snprintf(label, sizeof label, "  %s##nav%d", names[t], t);
-                if (ImGui::Selectable(label, tab == t, 0, ImVec2(0, 46 * s))) tab = t;
+                ImVec2 a = ImGui::GetCursorScreenPos(), b(a.x + ImGui::GetContentRegionAvail().x, a.y + row_h);
+                ImGui::PushID(t);
+                if (ImGui::InvisibleButton("##nav", ImVec2(b.x - a.x, row_h))) tab = t;
+                ImGui::PopID();
+                ImDrawList *dl = ImGui::GetWindowDrawList();
+                bool hot = ui_hot(a, b);
+                if (tab == t || hot) ui_pill(dl, a, b, tab == t);
+                ImVec2 ts = ImGui::CalcTextSize(names[t]);
+                dl->AddText(ImVec2(a.x + in, a.y + (row_h - ts.y) * 0.5f), ImGui::GetColorU32(ImGuiCol_Text), names[t]);
             }
-            ImGui::PopStyleVar();
             float play_h = 64 * s;
             ImGui::SetCursorPosY(fmaxf(ImGui::GetCursorPosY(), ImGui::GetWindowHeight() - pad - play_h));
             ImGui::PushStyleColor(ImGuiCol_Button, gold);
@@ -566,10 +611,12 @@ extern "C" void launcher_lg_run(const char *root) {
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, gold_hover);
             ImGui::PushStyleColor(ImGuiCol_Text, gold_text);
             ImGui::PushFont(fonts.title);
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0);
             ImGui::BeginDisabled(!ready);
             if (frame == 0 && ready) ImGui::SetKeyboardFocusHere();
             if (ImGui::Button(T("Play", "Jogar"), ImVec2(-FLT_MIN, play_h))) play = true;
             ImGui::EndDisabled();
+            ImGui::PopStyleVar();
             ImGui::PopFont();
             ImGui::PopStyleColor(4);
             if (!ready && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -581,45 +628,54 @@ extern "C" void launcher_lg_run(const char *root) {
 
         // ---- the page
         ImGui::SameLine(0, 0);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(pad * 1.3f, pad));
+        float cpad = 24 * s;  // (the content's sides: room for the cursor's arrow at the rows' left end)
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(cpad, pad));
         ImGui::BeginChild("##content", ImVec2(0, 0), ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NavFlattened,
                           ImGuiWindowFlags_NoScrollbar);
         {
-            ImGui::PushFont(fonts.title);
-            ImGui::TextColored(UI_GOLD, "%s", names[tab]);
-            ImGui::PopFont();
+            ui_title(fonts.title, names[tab]);
             {   // the window's buttons in its top right corner, side by side on one line (placed, not flowed after the title)
                 ImVec2 back = ImGui::GetCursorScreenPos(), wp = ImGui::GetWindowPos();
-                float bsz = 40 * s, gap = 6 * s, x = wp.x + ImGui::GetWindowWidth() - pad - bsz * 2 - gap, y = wp.y + pad * 0.6f;
+                float bsz = 40 * s, gap = 6 * s, x = wp.x + ImGui::GetWindowWidth() - cpad - bsz * 2 - gap, y = wp.y + pad * 0.6f;
                 ImGui::SetCursorScreenPos(ImVec2(x, y));
                 if (window_button("##min", false, bsz)) SDL_MinimizeWindow(win);
                 ImGui::SetCursorScreenPos(ImVec2(x + bsz + gap, y));
                 if (window_button("##close", true, bsz)) exit(0);
                 ImGui::SetCursorScreenPos(back);
             }
-            ImGui::Separator();
-            ImGui::BeginChild("##page", ImVec2(0, 0), ImGuiChildFlags_NavFlattened);
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 16 * s - ImGui::GetStyle().ItemSpacing.y);  // (16 px to the page)
+            ui_page_begin("##page", ImVec2(0, 0));
             if (tab == TAB_GAME) {
                 game_files_section(win);
                 ui_heading(T("Options", "Opções"));
+                // A / B and X / Y by the layout's positions (runtime/hle/bindings.c bind_set_layout)
+                const char *ol[] = {T("Wild battles (experimental)", "Batalhas selvagens (experimental)"),
+                                    T("Skip controller selection", "Pular a escolha do controle"), T("Controller layout", "Layout do controle")};
+                float ox = ui_label_x(ol, 3);
                 ImGui::BeginDisabled(!known);
-                ImGui::Checkbox(T("Wild battles (experimental)", "Batalhas selvagens (experimental)"), &wildb);
-                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                    ImGui::SetTooltip("%s", !known ? only : T("Touching a wild Pokémon starts a classic battle, then the capture, instead of going straight to the capture.",
-                                                             "Encostar num Pokémon selvagem começa uma batalha clássica e, depois, a captura, em vez de ir direto para a captura."));
-                ImGui::Checkbox(T("Skip controller selection", "Pular a escolha do controle"), &skipc);
-                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                    ImGui::SetTooltip("%s", !known ? only : T("The game starts at the Game Freak logo, with your controller already chosen, instead of asking for a button press first.",
-                                                             "O jogo começa no logo da Game Freak, com o seu controle já escolhido, em vez de pedir antes que se aperte um botão."));
+                ui_toggle("##wild", ol[0], ox, &wildb);
+                ui_tip(!known ? only : T("Touching a wild Pokémon starts a classic battle instead of going straight to the capture. "
+                                         "Its CATCH button throws one Poké Ball, with better odds the weaker the Pokémon is.",
+                                         "Encostar num Pokémon selvagem começa uma batalha clássica em vez de ir direto para a captura. "
+                                         "O botão de captura (CATCH) joga uma Poké Bola, com mais chance quanto mais fraco o Pokémon estiver."));
+                ui_toggle("##skipc", ol[1], ox, &skipc);
+                ui_tip(!known ? only : T("The game starts at the Game Freak logo, with your controller already chosen, instead of asking for a button press first.",
+                                         "O jogo começa no logo da Game Freak, com o seu controle já escolhido, em vez de pedir antes que se aperte um botão."));
                 ImGui::EndDisabled();
+                const char *lay[] = {"Nintendo", "Xbox"};
+                int lv = bind_layout();
+                ui_row(ol[2], ox);
+                if (ui_combo("##padlayout", &lv, lay, 2)) bind_set_layout(lv);
+                ui_tip(T("Which controller buttons are A / B and X / Y. Nintendo: A right, B bottom. Xbox: A bottom, B right, as the letters on an Xbox controller. The button prompts follow.",
+                         "Quais botões do controle são A / B e X / Y. Nintendo: A à direita, B embaixo. Xbox: A embaixo, B à direita, como as letras de um controle de Xbox. Os ícones dos botões acompanham."));
             } else if (tab == TAB_GRAPHICS) {
-                const char *extra[] = {T("Resolution", "Resolução")};
-                float x = ui_graphics_x(extra, 1);
+                const char *extra[] = {T("Resolution", "Resolução"), T("Fullscreen", "Tela cheia")};
+                float x = ui_graphics_x(extra, 2);
                 ui_row(extra[0], x);
-                ImGui::Combo("##res", &res, g_pt ? res_pt : res_en, 5);
-                ImGui::Checkbox(T("Fullscreen", "Tela cheia"), &full);
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T("When the game starts.", "Ao começar o jogo."));
-                ImGui::Separator();
+                ui_combo("##res", &res, g_pt ? res_pt : res_en, 5);
+                ui_toggle("##full", extra[1], x, &full);
+                ui_tip(T("When the game starts.", "Ao começar o jogo."));
+                ui_group_gap();
                 ui_page_graphics(x, known);
                 ui2x_section(ready, &ui2x_on);
             } else if (tab == TAB_IMAGE) {
@@ -629,12 +685,13 @@ extern "C" void launcher_lg_run(const char *root) {
             } else {
                 mods_section(win, inst);
             }
-            ImGui::EndChild();
+            ui_page_end();
         }
         ImGui::EndChild();
         ImGui::PopStyleVar();
         ImGui::End();
 
+        ui_frame_end();
         ImGui::Render();
         ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), (VkCommandBuffer)vk_frame_cmd());
         bool shot = shot_at && ++frame == shot_at;

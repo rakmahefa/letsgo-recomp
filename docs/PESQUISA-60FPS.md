@@ -260,3 +260,86 @@ float: `f_70005febd0`, o avanço do tempo da animação, é a alavanca, e a velo
 `LARECOMP_FIND_MOVER=<presente>` (dentro dos objetos de `f_70005ed120`, os trios de floats que andam 1–20 cm por
 atualização: a posição do jogador) e o `LARECOMP_WATCH_LIKE` acima. Desmontagem: `tools/disasm.py` (com o `main` do
 jogo em `extracted/exefs`).
+
+## Multiplicador livre por reexecução (19/10/2026, Pikachu 1.0.0)
+
+Pergunta: gerar 3x / 4x como o Lossless Scaling, em qualquer GPU, sem depender de FSR (no Vulkan só 1 quadro
+interpolado) nem de DLSS (multi-frame só nas RTX 50). Caminho explorado: a interpolação por reexecução desta página,
+com k − 1 imagens intermediárias por present em vez de uma.
+
+- **Código**: `vk_interp_render` virou `vk_interp_begin` (as verificações e a cópia de N) + `vk_interp_replay(t)` (a
+  reexecução no ponto t, chamável várias vezes) + `vk_interp_end` (a gravação passa ao quadro seguinte depois de todas).
+  `backend_present` (`device.c`) desenha k imagens, a j-ésima reexecutada logo antes de aparecer, a j/k do período
+  depois de N−1. A câmera das intermediárias (`mv_replay_camera`) aceita as k − 1 reexecuções de N, não só a primeira.
+  `LARECOMP_INTERP=1 LARECOMP_INTERP_MULT=<k>` liga (DEPURACAO.md).
+- **O defeito que tirou a interpolação do mundo**: canteiros e matos são a mesma malha desenhada dezenas de vezes sem
+  objeto do jogo, casados entre quadros pela ordem dos draws; quando a câmera anda e um deles sai do quadro, a ordem
+  desloca um e cada um mistura com o vizinho (no quadro de Pallet Town em que um arbusto sai, a intermediária quase
+  sem o canteiro). Agora cada draw escolhe, no primeiro cbuf, a ocorrência do quadro anterior com a cópia mais
+  próxima (`ip_pick`, a mesma ideia do `mvo_pick` dos vetores de movimento) e a usa nos outros cbufs. Pixels
+  inventados (fora dos dois vizinhos num raio de 4 px, metade superior esquerda): 1/4 e 3/4 de 0,11–0,21 % para
+  0,03–0,05 %, 1/2 de 0,79–0,87 % para 0,65–0,69 %; o canteiro fica inteiro.
+- **Posição**: base 30, k = 4, câmera descendo: o chão nas imagens anda 0 / 1,00 / 2,12 / 3,09 / 4,05 px (passos de
+  1/4). Base 60 (modo 60 nativo), k = 4: 0,47 / 0,99 / 1,72 / 2,08 px (deslocamentos pequenos, medida ruidosa).
+- **Custo**: ~2,6–3 ms por intermediária na thread do jogo em Pallet Town (o mesmo com FSR 3.1, SSAO e GI altos); a
+  interpolação desliga a thread de renderização.
+- **Ritmo, o limite atual**: as imagens saem da própria thread do jogo, esperando período/k entre elas, e a última
+  fica a (k − 1)/k do período. Base 30 com k = 4 (120 imagens/s) e base 60 com k = 2 (120) mantêm o jogo na velocidade
+  certa; base 60 com k = 4 (240, monitor de 240 Hz em mailbox) derruba o jogo para ~33 fps: sobram ~4 ms para o
+  quadro seguinte. Para multiplicadores altos a apresentação precisa sair da thread do jogo (as k − 1 imagens prontas
+  em cópias e uma thread que as apresenta no horário, como a swapchain do FSR 3 faz).
+- **Ainda a resolver**: interface, partículas e objetos sem par ficam em N (andam no ritmo base); com TAA / FSR 3 as
+  imagens são renderizadas fora de ordem no tempo (N, depois as anteriores a ele), o histórico vai e volta; o atraso de
+  um quadro base a mais; a thread de renderização desligada.
+
+### Apresentação no horário e a geração de quadros do menu (19/10/2026)
+
+- **Fora da thread do jogo**: as k − 1 intermediárias são renderizadas e guardadas de uma vez no present de N (cada
+  uma com o seu pós-processamento, enquanto a profundidade, os vetores e o jitter são dela: `vk_interp_keep`, `IpKeep`);
+  a primeira aparece logo e as outras ficam numa fila (`device.c` `vk_pending_*`) que a thread de renderização apresenta
+  no horário, entre os jobs do quadro seguinte ou esperando com prazo (`renderthread.c` `wait_work`). Sem a thread de
+  renderização, a espera continua na thread do jogo. Tudo tem de ser renderizado no present: a gravação do quadro
+  seguinte limpa as cópias de N−1.
+- **A corrida**: com a thread de renderização o jogo ia até dois presents à frente e reescrevia, para N+2, a memória
+  das listas que o present de N reexecutava (acesso a 0 em `exec_list`, na primeira tentativa com k = 8). Com a
+  interpolação ligada o jogo vai um present à frente (`rt_present`).
+- **Geração de quadros do F12** (`frame_gen = 2 / 3 / 4`) usa esta interpolação; a do FSR 3.1 e a swapchain do AMD
+  saíram. k = frame_gen × fps / base, a base sendo a taxa do mundo (fps) ou os 30 do próprio jogo, a que estiver mais
+  perto do ritmo medido do quadro (menus e batalhas a 30 no modo 60 recebem o dobro de imagens). Proporcional ao período
+  (a primeira versão), sem a thread de renderização as esperas alongavam o período, k subia e o jogo caía para ~26 fps.
+- **Medidas em velocidade real** (Pallet Town, RTX 5070 Ti, monitor de 240 Hz, mailbox): base 30 × 2 / 3 / 4 = 60 / 90 /
+  120 imagens por segundo; base 60 × 4 = 240 (também com FSR 3.1, SSAO e GI altos), com o jogo a 60; menu X no modo 60
+  com 4x: 240 (k = 8) com o jogo a 30; sem geração, o modo 60 como antes (menus com a intermediária: 60). Posições com
+  k = 4 pela fila: 0 / 0,99 / 2,09 / 3,08 / 4,04 px. 9000 quadros em turbo (26 101 reexecuções), andando e abrindo o
+  menu, com FSR 3.1 e SSAO: sem falhas.
+- **Pendente**: interface e partículas no ritmo base; TAA / FSR 3.1 com as imagens fora de ordem no tempo; batalhas e
+  capturas com a geração ligada não verificadas depois do pareamento por conteúdo; Eevee não testado (a interpolação
+  não depende de endereços).
+
+### Imagens laterais e 4K (19/10/2026)
+
+- **Problema relatado**: a 4K o desempenho caía e a imagem "tremia em blocos". Nos logs do jogador: FSR 3.1 nativo
+  (3840x2160), SSAO médio, GI alta; com 2x o jogo caía de 60 para ~26-35 fps.
+- **k realimentado**: k vinha do período medido; um quadro que a GPU não terminava a tempo chegava mais tarde, recebia
+  mais imagens (4 em vez de 2) e atrasava mais. Agora k = frame_gen × fps × `fps60_period_ns()` (o ritmo que o modo 60
+  pretende: o mundo a 60 / 120, menus, batalhas e o início a 30), sem o período medido.
+- **Imagens laterais**: renderizadas depois de N, mas antes dele no tempo, as intermediárias contavam como quadros
+  próprios (`fx_frame`) e levavam todo histórico para trás e para a frente: a acumulação da GI (meia resolução, 4
+  raios) e do SSAO piscava em manchas, o TAA e o FSR 3.1 recebiam o passado depois do futuro, e a sequência de jitter
+  pulava fases (à 2x, metade das oito do FSR). Agora as intermediárias leem o estado de N e não o mudam:
+  câmera de N guardada e reposta em volta de cada uma (`ip_cam_save` / `ip_cam_restore`, o anterior delas é N); os
+  vetores por objeto delas não gravam e usam o registro de N (`mvo_prev_frame`); SSAO / GI = o resultado de N movido
+  pelos vetores delas (`reproject.frag`, post images 28 / 29), sem recálculo; TAA lê o histórico de N e escreve à parte
+  (post image 27); com FSR 3.1 são resolvidas contra a saída do FSR de N como um TAA (`side_resolve.frag`, post image
+  30) - um segundo contexto do FSR para elas foi tentado e deixado: os vetores delas são relativos a N, não à
+  intermediária anterior que esse contexto tinha no histórico, e elas saíam comprimidas para trás. Os quadros reais
+  encadeiam pela contagem de presents (`vp_real`, `CamReal.real`, os históricos de SSAO / GI / TAA, o registro dos
+  vetores), e o jitter tem uma sequência para os reais e outra para as intermediárias.
+- **Medidas**: câmera parada, 4K, FSR 3.1, só o chão: real → intermediária → real 0,49 / 0,20 antes (vai e volta),
+  0,35 / 0,35 agora, como real → real (0,31). Câmera andando: as intermediárias seguem o movimento com os quatro modos
+  (sem AA, SMAA, TAA, FSR). 4K em velocidade real (mundo a 60, SSAO médio, GI alta): FSR nativo 2x 60 fps / 120
+  imagens (antes ~30 / 120), nativo 3x ~48 / ~145, Quality 3x 60 / 180, Quality 4x ~55 / ~220. Um quadro com uma
+  intermediária a 4K: 9,5 ms de GPU contra 6,7 sem ela. 9000 quadros em turbo com FSR e com TAA (26 101 reexecuções
+  cada): sem falhas.
+- **Testes**: o save do jogador mudou (ele seguiu jogando: Rota 1); os roteiros dão outras cenas nos mesmos quadros e
+  as medidas de antes (Pallet Town) não se comparam com as de agora.

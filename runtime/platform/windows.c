@@ -44,18 +44,58 @@ static LONG CALLBACK vectored_handler(EXCEPTION_POINTERS *ep) {
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
+// The written-pages tracking (plat_watch_writes): the window's top part is a reservation of its own made with MEM_WRITE_WATCH
+// (the OS keeps a written bit per page; GetWriteWatch reads and clears them), so the rest pays nothing for it.
+static uint64_t g_watch_lo;
+
+// On by default only where the primary display adapter is an NVIDIA card: the heap is also imported into Vulkan
+// (VK_EXT_external_memory_host, exec.c gmem_import), and a write-watched region was only tested there. Elsewhere off until it
+// is; LARECOMP_WRITE_WATCH=1 / 0 forces it on / off.
+static bool primary_adapter_is_nvidia(void) {
+    DISPLAY_DEVICEW dd = {.cb = sizeof dd};
+    for (DWORD i = 0; EnumDisplayDevicesW(NULL, i, &dd, 0); i++, dd.cb = sizeof dd)
+        if (dd.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE) return wcsstr(dd.DeviceString, L"NVIDIA") != NULL;
+    return false;
+}
+
+bool plat_watch_writes(uint64_t watch_lo) {
+    const char *e = getenv("LARECOMP_WRITE_WATCH");
+    if (e ? atoi(e) == 0 : !primary_adapter_is_nvidia()) return false;
+    g_watch_lo = watch_lo;
+    return true;
+}
+
 bool plat_reserve_guest(uint64_t lo, uint64_t hi) {
-    void *p = VirtualAlloc((void *)(uintptr_t)lo, hi - lo, MEM_RESERVE, PAGE_READWRITE);
+    uint64_t split = g_watch_lo > lo && g_watch_lo < hi ? g_watch_lo : hi;
+    void *p = VirtualAlloc((void *)(uintptr_t)lo, split - lo, MEM_RESERVE, PAGE_READWRITE);
     if (p != (void *)(uintptr_t)lo) return false;
+    if (split < hi && VirtualAlloc((void *)(uintptr_t)split, hi - split, MEM_RESERVE | MEM_WRITE_WATCH, PAGE_READWRITE) != (void *)(uintptr_t)split) {
+        VirtualFree(p, 0, MEM_RELEASE);
+        return false;
+    }
+    if (split == hi) g_watch_lo = 0;
     g_lo = lo;
     g_hi = hi;
     AddVectoredExceptionHandler(1, vectored_handler);
     return true;
 }
 
-// Decommit everything: the range stays reserved, and pages come back zeroed when committed again (lazily).
+// Decommit everything: the range stays reserved, and pages come back zeroed when committed again (lazily). (One call per
+// reservation: a decommit can't span two.)
 bool plat_reset_guest(uint64_t lo, uint64_t hi) {
-    return VirtualFree((void *)(uintptr_t)lo, hi - lo, MEM_DECOMMIT) != 0;
+    uint64_t split = g_watch_lo > lo && g_watch_lo < hi ? g_watch_lo : hi;
+    bool ok = VirtualFree((void *)(uintptr_t)lo, split - lo, MEM_DECOMMIT) != 0;
+    if (split < hi) ok = VirtualFree((void *)(uintptr_t)split, hi - split, MEM_DECOMMIT) != 0 && ok;
+    return ok;
+}
+
+int plat_written(uint64_t addr, uint64_t size, uint64_t *out, int max) {
+    if (!g_watch_lo || addr < g_watch_lo || addr + size > g_hi || max <= 0) return -1;
+    uint64_t a = addr & ~0xFFFull, e = (addr + size + 0xFFF) & ~0xFFFull;
+    ULONG_PTR n = (ULONG_PTR)max;
+    DWORD gran = 0;
+    if (GetWriteWatch(WRITE_WATCH_FLAG_RESET, (void *)(uintptr_t)a, (SIZE_T)(e - a), (PVOID *)out, &n, &gran) != 0) return -1;
+    return (int)n;
 }
 
 void plat_commit(uint64_t addr, uint64_t size) {
@@ -137,12 +177,12 @@ static void log_to_file_without_console(void) {
     _putenv("LASRECOMP_LOG_APPEND=1");
 }
 
-// The recompiled game code is built for x86-64-v3 (Makefile GENARCH: AVX2, FMA, BMI2): say so instead of crashing
-// with an illegal instruction on an older CPU.
+// The recompiled game code is built for x86-64-v3 (AVX2, FMA, BMI2) or, without it, x86-64-v2 (gamelib_cpu_level):
+// below that, say so instead of crashing with an illegal instruction.
 static void require_cpu(void) {
     __builtin_cpu_init();
-    if (__builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma") && __builtin_cpu_supports("bmi2")) return;
-    MessageBoxA(NULL, RT_APP_NAME " needs a CPU with AVX2 (Intel Haswell / 2013 or newer, AMD Excavator / Zen or newer).",
+    if (__builtin_cpu_supports("x86-64-v2")) return;
+    MessageBoxA(NULL, RT_APP_NAME " needs a CPU with SSE4.2 (Intel Nehalem / 2008 or newer, AMD Bulldozer / 2011 or newer).",
                 RT_APP_NAME, MB_ICONERROR | MB_OK);
     ExitProcess(1);
 }

@@ -44,6 +44,9 @@ bool plat_reset_guest(uint64_t lo, uint64_t hi) {
 
 void plat_commit(uint64_t addr, uint64_t size) { (void)addr; (void)size; }
 
+bool plat_watch_writes(uint64_t watch_lo) { (void)watch_lo; return false; }
+int plat_written(uint64_t addr, uint64_t size, uint64_t *out, int max) { (void)addr, (void)size, (void)out, (void)max; return -1; }
+
 int plat_protect(uint64_t addr, uint64_t size, int prot) {
     int p = prot == PLAT_PROT_NONE ? PROT_NONE : prot == PLAT_PROT_READ ? PROT_READ : PROT_READ | PROT_WRITE;
     return mprotect((void *)(uintptr_t)addr, size, p);
@@ -102,13 +105,13 @@ static void log_to_file_without_terminal(void) {
 }
 
 #if defined(__x86_64__)
-// The recompiled game code is built for x86-64-v3 (Makefile GENARCH: AVX2, FMA, BMI2): say so instead of crashing
-// with an illegal instruction on an older CPU.
+// The recompiled game code is built for x86-64-v3 (AVX2, FMA, BMI2) or, without it, x86-64-v2 (gamelib_cpu_level):
+// below that, say so instead of crashing with an illegal instruction.
 static void require_cpu(void) {
     __builtin_cpu_init();
-    if (__builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma") && __builtin_cpu_supports("bmi2")) return;
-    fprintf(stderr, "FATAL: " RT_APP_NAME " needs a CPU with AVX2 (Intel Haswell / 2013 or newer, AMD Excavator / Zen or "
-                    "newer).\n");
+    if (__builtin_cpu_supports("x86-64-v2")) return;
+    fprintf(stderr, "FATAL: " RT_APP_NAME " needs a CPU with SSE4.2 (Intel Nehalem / 2008 or newer, AMD Bulldozer / 2011 "
+                    "or newer).\n");
     exit(1);
 }
 #else

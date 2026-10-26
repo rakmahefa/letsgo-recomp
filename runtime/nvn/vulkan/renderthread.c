@@ -31,6 +31,9 @@ uint64_t renderer_present_count(void);             // device.c: presents shown
 void input_frame(uint64_t frame);                  // hle/input.c
 void fnprof_frame(uint64_t frame);                 // fnprof.c
 void reboot_test_frame(uint64_t frame);            // main.c
+bool vk_pending_next(uint64_t *due);               // device.c: the next scheduled image's time (false: none)
+void vk_pending_run(bool all);                     // device.c: show the scheduled images due by now
+void vk_pending_drop(void);                        // device.c: forget them (a reboot)
 
 enum { RJ_EXEC, RJ_PRESENT, RJ_CALL };
 typedef struct {
@@ -61,7 +64,6 @@ bool rt_active(void) {
     if (on < 0) {
         const char *e = getenv("LARECOMP_RENDER_THREAD");
         on = e ? atoi(e) != 0 : g_settings.render_thread;  // (the environment wins over larecomp.ini)
-        if (getenv("LARECOMP_INTERP")) on = 0;  // (research: the interpolation replays lists on the game thread)
         if (on) LOG("[rt] render thread on\n");
     }
     return on;
@@ -84,17 +86,36 @@ static void run(Job *j) {
     }
 }
 
+// The images a present scheduled for later (frame interpolation: device.c vk_pending_*) are shown here when due:
+// between jobs, or while waiting for one - the next frame's lists run meanwhile instead of waiting with them.
+// A job runs to its end first, so an image can come up to one job late (a command list: well under a millisecond).
+static void wait_work(void) {  // (holds lk; returns with a job queued)
+    while (qhead == qtail) {
+        uint64_t due;
+        if (!vk_pending_next(&due)) { pthread_cond_wait(&c_work, &lk); continue; }
+        uint64_t now = SDL_GetTicksNS();
+        // Until it is due, slices of at most 1 ms with SDL's high-resolution timer, looking for work between them: a
+        // timed wait on the condition (winpthreads) woke up to ~7 ms late, absolute or relative - the scheduled image
+        // came with the next present instead (2x: shown in pairs, 15 / 2 ms apart instead of 8.3 / 8.3)
+        pthread_mutex_unlock(&lk);
+        if (due > now) SDL_DelayPrecise(due - now > 1000000 ? 1000000 : due - now);
+        vk_pending_run(false);
+        pthread_mutex_lock(&lk);
+    }
+}
+
 static void *render_main(void *arg) {
     (void)arg;
     on_render_thread = true;
     crash_handler_install();
     pthread_mutex_lock(&lk);
     for (;;) {
-        while (qhead == qtail) pthread_cond_wait(&c_work, &lk);
+        wait_work();
         Job j = queue[qhead % QN];
         busy = true;
         pthread_mutex_unlock(&lk);
         if (!dropping || j.kind == RJ_CALL) run(&j);  // (a reboot drops queued lists and presents, never a caller's call)
+        if (!dropping) vk_pending_run(false);
         uint64_t seq = renderer_fence_seq();
         pthread_mutex_lock(&lk);
         qhead++;
@@ -142,7 +163,7 @@ static uint64_t push(Job j) {
 void rt_submit(uint64_t handle) {
     if (!rt_active()) { backend_execute(handle); return; }
     Job j = {.kind = RJ_EXEC, .handle = handle, .dirty = backend_dirty_seq()};
-    push(j);
+    nvn_list_submitted(handle, push(j));  // (the fences recorded in it: this job's)
 }
 
 // Game thread: the frame's present. The window shows it when the render thread gets there; the game's own bookkeeping that a
@@ -150,8 +171,13 @@ void rt_submit(uint64_t handle) {
 void rt_present(NvnTexture *t) {
     if (!t) return;
     if (!rt_active()) { backend_present(t); return; }
+    // Frame interpolation replays the frame's command lists at its present (exec.c vk_interp_replay): the game may not
+    // write them again for the frame after the next until then, so it runs one present ahead instead of two (with two,
+    // its next-but-one frame went into the memory being replayed: a crash in the replay)
+    extern bool vk_interp_enabled(void);
+    int ahead = vk_interp_enabled() ? 1 : MAX_PRESENTS;
     pthread_mutex_lock(&lk);
-    while (pres_enq - pres_fin >= MAX_PRESENTS)
+    while (pres_enq - pres_fin >= (uint64_t)ahead)
         if (!wait_done()) { pthread_mutex_unlock(&lk); return; }
     pres_enq++;
     pthread_mutex_unlock(&lk);
@@ -211,5 +237,6 @@ void rt_reset(void) {
     dropping = false;
     pres_enq = pres_fin = 0;
     pthread_mutex_unlock(&lk);
+    vk_pending_drop();
     __atomic_store_n(&game_frames, renderer_present_count(), __ATOMIC_RELAXED);
 }

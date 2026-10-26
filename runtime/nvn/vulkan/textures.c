@@ -429,6 +429,12 @@ void vk_tex_unscale(NvnTexture *t) {
 
 void backend_texture_destroyed(NvnTexture *t) {
     TexBackend *b = t->backend;
+    if (b && b->full) b = t->backend = b->full;  // (its twin standing in: vk_tex_lo_begin)
+    if (b && b->lo) {
+        destroy_image(b->lo);
+        free(b->lo);
+        b->lo = NULL;
+    }
     if (b) {
         live_remove(b);
         destroy_image(b);
@@ -444,6 +450,87 @@ void vk_textures_reset(void) {
     while (g_nlive > 0) backend_texture_destroyed(g_live[g_nlive - 1]);
     vk_collect_dead();
     LOG("[vk] reboot: %d textures released\n", n);
+}
+
+// ================================================================== the in-between images at a reduced size
+// Frame generation renders its in-between images by replaying frame N's command lists (exec.c vk_interp_replay); at
+// 4K the scene alone is 1.3 ms of an image's ~3.7. With LARECOMP_FG_SCALE (research) they are
+// rendered smaller: every scaled render target (the game's 1080p-sized ones: scene, depth, bloom, composite) gives way
+// to a twin at f x its size for the replay, and the result is resolved against frame N's full-size image (exec.c
+// post_process_ex, side_resolve.frag). The game's own code, its viewports and our passes see only smaller targets
+// (their scale, sx / sy, is the twin's), so nothing else changes. A twin the replay reads before rendering to it (a
+// target the game draws once, not every frame) is filled from its full-size image from then on.
+extern uint32_t vk_view_gen;
+static bool g_lo_on;
+static float g_lo_saved_x, g_lo_saved_y;
+static NvnTexture **g_lo_swapped;
+static int g_nlo_swapped, g_cap_lo_swapped;
+bool vk_tex_lo_active(void) { return g_lo_on; }
+TexBackend *vk_tex_lo(TexBackend *b) { return g_lo_on && b && b->lo && b->lo->full == b ? b->lo : b; }
+void vk_full_barrier(VkCommandBuffer cb);
+void vk_barrier(VkCommandBuffer cb, VkPipelineStageFlags2 ss, VkAccessFlags2 sa, VkPipelineStageFlags2 ds, VkAccessFlags2 da);
+static void lo_seed(TexBackend *b, TexBackend *lo) {
+    VkFormatFeatureFlags need = VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT;
+    bool depth = (b->aspect & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) != 0;
+    if (!depth) need |= VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+    if (!format_supports(b->format, need) || b->format != lo->format) return;
+    VkCommandBuffer cb = vk_cmd();
+    vk_barrier(cb, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
+               VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT);
+    for (uint32_t lv = 0; lv < b->levels && lv < lo->levels; lv++) {
+        VkImageBlit bl = {.srcSubresource = {b->aspect, lv, 0, b->layers}, .dstSubresource = {lo->aspect, lv, 0, lo->layers},
+                          .srcOffsets = {{0, 0, 0}, {(int32_t)level_w(b, lv), (int32_t)level_h(b, lv), 1}},
+                          .dstOffsets = {{0, 0, 0}, {(int32_t)level_w(lo, lv), (int32_t)level_h(lo, lv), 1}}};
+        vkCmdBlitImage(cb, b->image, VK_IMAGE_LAYOUT_GENERAL, lo->image, VK_IMAGE_LAYOUT_GENERAL, 1, &bl,
+                       depth ? VK_FILTER_NEAREST : VK_FILTER_LINEAR);
+    }
+    vk_barrier(cb, VK_PIPELINE_STAGE_2_BLIT_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_TRANSFER_READ_BIT,
+               VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);
+}
+void vk_tex_lo_begin(float f) {
+    if (g_lo_on) return;
+    g_lo_saved_x = g_rs_x, g_lo_saved_y = g_rs_y;
+    g_rs_x *= f, g_rs_y *= f;  // (the twins' scale: tex_backend keeps them at it, create_image makes them at it)
+    g_nlo_swapped = 0;
+    for (int i = 0; i < g_nlive; i++) {
+        NvnTexture *t = g_live[i];
+        TexBackend *b = t->backend;
+        if (!b || !b->scalable || !b->image || b->full) continue;
+        TexBackend *lo = b->lo;
+        if (!lo) lo = b->lo = calloc(1, sizeof *lo), lo->full = b;
+        if (!lo->image || lo->sx != g_rs_x || lo->sy != g_rs_y) {
+            if (lo->image) destroy_image(lo);
+            lo->scalable = true;
+            create_image(t, lo);
+        }
+        // (as its target is now: N rendered it, so the replay neither clears it nor counts a first write)
+        lo->presented = b->presented, lo->gpu_owned = true, lo->touched_frame = b->touched_frame;
+        lo->frame_cleared = b->frame_cleared, lo->level_gen = b->level_gen;
+        lo->lo_use = 0;
+        if (b->lo_seed) lo_seed(b, lo);
+        if (g_nlo_swapped == g_cap_lo_swapped)
+            g_cap_lo_swapped = g_cap_lo_swapped ? g_cap_lo_swapped * 2 : 256,
+            g_lo_swapped = realloc(g_lo_swapped, g_cap_lo_swapped * sizeof *g_lo_swapped);
+        g_lo_swapped[g_nlo_swapped++] = t;
+        t->backend = lo;
+    }
+    g_lo_on = true;
+    vk_view_gen++;  // (exec.c's per-frame view memo: the views are the twins' now)
+}
+void vk_tex_lo_end(void) {
+    if (!g_lo_on) return;
+    for (int i = 0; i < g_nlo_swapped; i++) {
+        NvnTexture *t = g_lo_swapped[i];
+        TexBackend *lo = t->backend;
+        if (lo && lo->full) {
+            lo->full->presented |= lo->presented;
+            t->backend = lo->full;
+        }
+    }
+    g_nlo_swapped = 0;
+    g_rs_x = g_lo_saved_x, g_rs_y = g_lo_saved_y;
+    g_lo_on = false;
+    vk_view_gen++;
 }
 
 // ================================================================== uploads (same change detection as metal.m)
@@ -767,6 +854,14 @@ static void dirty_check(NvnTexture *t, TexBackend *b) {
 
 TexBackend *vk_tex(NvnTexture *t, bool for_render) {
     TexBackend *b = tex_backend(t);
+    if (b->full && !b->lo_use) {  // (a twin's first use in this in-between image: read first, it is filled from now on)
+        b->lo_use = for_render ? 1 : 2;
+        if (!for_render && !b->full->lo_seed) {
+            b->full->lo_seed = true;
+            LOG("[vk] reduced in-between images: %ux%u fmt %#x is read before it is drawn: filled from the full image\n",
+                t->width, t->height, t->format);
+        }
+    }
     if (t->addr && !for_render) dirty_check(t, b);
     if (b->pending_rgba) upload_pending(b);
     if (for_render) b->gpu_owned = true;
@@ -945,6 +1040,42 @@ VkImageView vk_dummy_view(int textype) {
     return views[textype];
 }
 
+// A 1x1 depth image at 1.0 for depth-compare lookups that have no depth texture bound (exec.c texture_info): the
+// game binds a small colour texture there when it has no shadow map (a battle: 16x16, format 0x25). The Switch compares
+// against its red channel; Vulkan leaves a compare on a colour format undefined (the validation layer's
+// VUID-vkCmdDrawIndexed-None-06479), so it is this image instead - every lookup lit, as against that white texture.
+VkImageView vk_dummy_depth_view(int textype) {
+    static TexBackend dummies[10];
+    static VkImageView views[10];
+    if (textype < 0 || textype >= 10) textype = TEXTYPE_2D;
+    if (views[textype]) return views[textype];
+    TexBackend *b = &dummies[textype];
+    VkImageViewType vt = view_type_for(textype);
+    if (vt == VK_IMAGE_VIEW_TYPE_3D) return vk_dummy_view(textype);  // (no 3D depth images)
+    bool cube = vt == VK_IMAGE_VIEW_TYPE_CUBE || vt == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
+    VkFormat fmt = VK_FORMAT_D32_SFLOAT;
+    VkFormatProperties fp;
+    vkGetPhysicalDeviceFormatProperties(g_vk.phys, fmt, &fp);
+    if (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) fmt = VK_FORMAT_D16_UNORM;
+    VkImageCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .flags = cube ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0,
+                            .imageType = vt == VK_IMAGE_VIEW_TYPE_1D || vt == VK_IMAGE_VIEW_TYPE_1D_ARRAY ? VK_IMAGE_TYPE_1D : VK_IMAGE_TYPE_2D,
+                            .format = fmt, .extent = {1, 1, 1}, .mipLevels = 1, .arrayLayers = cube ? 6 : 1,
+                            .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_OPTIMAL,
+                            .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT};
+    VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+    VK_CHECK(vmaCreateImage(g_vk.vma, &ci, &ai, &b->image, &b->mem, NULL));
+    VkCommandBuffer cb = vk_upload_cmd();
+    vk_image_init_layout(cb, b->image, VK_IMAGE_ASPECT_DEPTH_BIT);
+    VkClearDepthStencilValue one = {1.0f, 0};
+    VkImageSubresourceRange all = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, cube ? 6 : 1};
+    vkCmdClearDepthStencilImage(cb, b->image, VK_IMAGE_LAYOUT_GENERAL, &one, 1, &all);
+    b->format = fmt;
+    b->levels = 1;
+    b->layers = cube ? 6 : 1;
+    views[textype] = vk_image_view(b, vt, b->format, 0, 1, 0, cube ? 6 : 1, IDENTITY, VK_IMAGE_ASPECT_DEPTH_BIT);
+    return views[textype];
+}
+
 // ================================================================== samplers
 static VkCompareOp compare_op(uint32_t f) {
     switch (f) {
@@ -1046,6 +1177,50 @@ VkSampler vk_sampler(NvnSamplerDesc *d) {
     VkSampler s = sampler_create(&k, lin);
     if (n < 64) tab[n].d = k, tab[n].lin = lin, tab[n].s = s, n++;  // (past 64: a new one each time - not seen in the game)
     return s;
+}
+
+// The sampler of d with `bias` more mip bias (exec.c texture_info: TAA / FSR 3.1), mipmapped and linearly filtered
+// ones only; the others, d's own. Kept by description and bias (the bias takes few values: steps of 0.25), never freed -
+// d is copied by value into the sampler pools.
+VkSampler vk_sampler_biased(NvnSamplerDesc *d, float bias) {
+    uint32_t mf = d->min_filter;
+    if (bias == 0 || !(mf == 3 || mf == 5) || d->compare_mode) return vk_sampler(d);
+    typedef struct { NvnSamplerDesc d; float bias; VkSampler s; } Biased;
+    static Biased *tab;
+    static uint32_t cap, n;
+    NvnSamplerDesc k = *d;
+    k.backend = NULL;
+    uint64_t h = 0xcbf29ce484222325ull;
+    const uint8_t *kb = (const uint8_t *)&k;
+    for (size_t i = 0; i < sizeof k; i++) h = (h ^ kb[i]) * 0x100000001B3ull;
+    uint32_t bq = (uint32_t)(int32_t)lroundf(bias * 4);
+    h = (h ^ bq) * 0x100000001B3ull;
+    if (n * 2 >= cap) {  // (open addressing, grown at half full)
+        uint32_t ncap = cap ? cap * 2 : 512;
+        Biased *nt = calloc(ncap, sizeof *nt);
+        for (uint32_t i = 0; i < cap; i++) {
+            if (!tab[i].s) continue;
+            uint64_t hh = 0xcbf29ce484222325ull;
+            const uint8_t *b = (const uint8_t *)&tab[i].d;
+            for (size_t j = 0; j < sizeof tab[i].d; j++) hh = (hh ^ b[j]) * 0x100000001B3ull;
+            hh = (hh ^ (uint32_t)(int32_t)lroundf(tab[i].bias * 4)) * 0x100000001B3ull;
+            uint32_t sl = (uint32_t)hh & (ncap - 1);
+            while (nt[sl].s) sl = (sl + 1) & (ncap - 1);
+            nt[sl] = tab[i];
+        }
+        free(tab);
+        tab = nt, cap = ncap;
+    }
+    uint32_t sl = (uint32_t)h & (cap - 1);
+    while (tab[sl].s) {
+        if (tab[sl].bias == bias && !memcmp(&tab[sl].d, &k, sizeof k)) return tab[sl].s;
+        sl = (sl + 1) & (cap - 1);
+    }
+    NvnSamplerDesc b = k;
+    b.lod_bias += bias;
+    tab[sl] = (Biased){k, bias, sampler_create(&b, false)};
+    n++;
+    return tab[sl].s;
 }
 
 VkSampler vk_default_sampler(bool linear) {

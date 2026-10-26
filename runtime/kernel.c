@@ -68,7 +68,11 @@ static void handle_close(uint32_t h) {
 // Threads blocked in WaitSynchronization; object signals wake only these (caller holds g_klock).
 static KThread *g_syncwaiters;
 
-static void wake(KThread *t) { pthread_cond_signal(&t->cond); }
+static int g_prof_cv = -1;  // LARECOMP_PROF_CONDVAR (svc_wait_process_wide_key below)
+static void wake(KThread *t) {
+    if (g_prof_cv > 0) t->woken_ns = plat_now_ns();
+    pthread_cond_signal(&t->cond);
+}
 
 void kernel_signal(KObject *o) {
     // caller holds g_klock
@@ -439,9 +443,36 @@ static uint32_t svc_arbitrate_unlock(uint64_t addr) {
     return R_OK;
 }
 
+// LARECOMP_PROF_CONDVAR=1: every 2 s, the condition-variable waits by how long they took (until the thread runs again), and how
+// long the woken threads took to run after their waker released them (the wake-up latency spinning would save)
+static uint64_t cv_hist[8], cv_lat_ns, cv_lat_n, cv_wait_ns;
+static void cv_prof_note(uint64_t t0, uint64_t woken) {  // (caller holds g_klock)
+    static const uint64_t edges[7] = {10000, 25000, 50000, 100000, 250000, 1000000, 5000000};
+    static uint64_t last;
+    uint64_t now = plat_now_ns(), d = now - t0;
+    int b = 0;
+    while (b < 7 && d >= edges[b]) b++;
+    cv_hist[b]++;
+    cv_wait_ns += d;
+    if (woken > t0 && woken <= now) cv_lat_ns += now - woken, cv_lat_n++;
+    if (!last) last = now;
+    if (now - last < 2000000000ull) return;
+    last = now;
+    LOG("[condvar] waits <10us %llu, <25 %llu, <50 %llu, <100 %llu, <250 %llu, <1ms %llu, <5ms %llu, more %llu; %.0f ms waited; "
+        "wake-up latency %.1f us average over %llu (%.0f ms)\n",
+        (unsigned long long)cv_hist[0], (unsigned long long)cv_hist[1], (unsigned long long)cv_hist[2], (unsigned long long)cv_hist[3],
+        (unsigned long long)cv_hist[4], (unsigned long long)cv_hist[5], (unsigned long long)cv_hist[6], (unsigned long long)cv_hist[7],
+        cv_wait_ns / 1e6, cv_lat_n ? cv_lat_ns / 1e3 / cv_lat_n : 0.0, (unsigned long long)cv_lat_n, cv_lat_ns / 1e6);
+    memset(cv_hist, 0, sizeof cv_hist);
+    cv_lat_ns = cv_lat_n = cv_wait_ns = 0;
+}
+
 static uint32_t svc_wait_process_wide_key(uint64_t mutex, uint64_t key, uint32_t tag, int64_t timeout) {
     pthread_mutex_lock(&g_klock);
     KThread *t = t_cur;
+    if (g_prof_cv < 0) g_prof_cv = getenv("LARECOMP_PROF_CONDVAR") != NULL;
+    uint64_t cv_t0 = g_prof_cv ? plat_now_ns() : 0;
+    t->woken_ns = 0;
     mutex_release(mutex);
     t->wait_kind = WAIT_CONDVAR;
     t->wait_addr = key;
@@ -449,6 +480,7 @@ static uint32_t svc_wait_process_wide_key(uint64_t mutex, uint64_t key, uint32_t
     t->wait_tag = tag;
     __atomic_store_n(u32p(key), 1, __ATOMIC_SEQ_CST);
     uint32_t r = block_current(timeout);
+    if (g_prof_cv) cv_prof_note(cv_t0, t->woken_ns);
     // Timed out / cancelled: the mutex is NOT reacquired here. As on the console, the caller does it: the SDK's
     // InternalConditionVariableImplByHorizon::TimedWait calls InternalCriticalSection::Enter on 0xea01 (TimedOut).
     // Reacquiring it here too left the thread owning the mutex and then waiting on itself (Let's Go boot deadlock).

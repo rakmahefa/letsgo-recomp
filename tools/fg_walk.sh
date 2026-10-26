@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # fg_walk.sh <name> <frames, e.g. "1480 1520"> [ini lines]: the scripted run of tools/scenario_shot.sh at real speed (fps
 # 30, not turbo), walking (WALK="<frame>:STICK_DOWN:<frames>", default up from 1500); the window as it reached the
-# screen captured from the desktop (tools/winshot.ps1) at those frames -> $OUT/<name>/win_N.png. With
-# LARECOMP_FG_ONLY_GENERATED=1: frame generation's frames alone. Opens the game window; do not cover it.
+# screen captured from the desktop (tools/winshot.ps1) at those frames -> $OUT/<name>/win_N.png; the log has the
+# game's and the window's rates ("frame ... fps", "window ... fps"). Opens the game window; do not cover it.
 set -u
 SP=$(cd "$(dirname "$0")" && pwd)
 GAME=${GAME:-/d/LetsGoRecomp/LetsGoRecomp}
