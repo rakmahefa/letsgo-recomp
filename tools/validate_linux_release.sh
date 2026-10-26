@@ -123,8 +123,9 @@ jq -e '.errors == [] and .elf_count > 0' "$ARTIFACT_DIR/linux-elf-audit.json" >/
 manifest_copy_sha="$(sha256sum "$ARTIFACT_DIR/build-manifest.json" | awk '{ print $1 }')"
 sbom_sha="$(sha256sum "$ARTIFACT_DIR/sbom.cdx.json" | awk '{ print $1 }')"
 elf_report_sha="$(sha256sum "$ARTIFACT_DIR/linux-elf-audit.json" | awk '{ print $1 }')"
-jq -e --arg manifest_sha "$manifest_copy_sha" --arg sbom_sha "$sbom_sha" --arg dep_sha "$dependency_sha" --arg elf_sha "$elf_report_sha" \
-  '.evidence.build_manifest.sha256 == $manifest_sha and .evidence.cyclonedx_sbom.sha256 == $sbom_sha and .evidence.dependency_lock.sha256 == $dep_sha and .evidence.elf_audit.sha256 == $elf_sha' \
+size_report_sha="$(sha256sum "$ARTIFACT_DIR/build-size-report.txt" | awk '{ print $1 }')"
+jq -e --arg manifest_sha "$manifest_copy_sha" --arg sbom_sha "$sbom_sha" --arg dep_sha "$dependency_sha" --arg elf_sha "$elf_report_sha" --arg size_sha "$size_report_sha" \
+  '.evidence.build_manifest.sha256 == $manifest_sha and .evidence.cyclonedx_sbom.sha256 == $sbom_sha and .evidence.dependency_lock.sha256 == $dep_sha and .evidence.elf_audit.sha256 == $elf_sha and .evidence.size_report.sha256 == $size_sha' \
   "$ARTIFACT_DIR/build-manifest-release.json" >/dev/null
 
 # Test the actual AppImage code path with no write access to the repository. --version avoids SDL/GPU
