@@ -87,7 +87,7 @@ class WorkflowDryRunTests(unittest.TestCase):
         self.assertNotIn("gh release create", workflow.split("  preflight:", 1)[1].split("  publish:", 1)[0])
         publish_job = workflow.split("  publish:", 1)[1]
         self.assertIn("contents: write", publish_job)
-        self.assertIn("gh \"\u0024{args[@]}\"", publish_job)
+        self.assertIn('gh "${args[@]}"', publish_job)
 
 
 class ArtifactPolicyTests(unittest.TestCase):
