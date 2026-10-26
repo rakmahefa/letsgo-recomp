@@ -327,6 +327,7 @@ static void *setup_thread(void *arg) {
     if (!g_folder[0]) {  // only the game code (files set up already, e.g. a new version of the app)
         LOG("[setup] the game files are set up, the game code is from another version: rebuilding it\n");
         if (build_code()) g_state = setup_ready() ? SETUP_DONE : SETUP_FAIL_BUILD;
+        LOG("[setup] rebuild-only total_ms=%llu\n", (unsigned long long)((plat_now_ns() - setup_t0) / 1000000ull));
         g_running = false;
         return NULL;
     }
@@ -348,7 +349,12 @@ static void *setup_thread(void *arg) {
         if (realpath(f.exefs, a) && realpath(ROOT, b) && !strncmp(a, b, strlen(b)))
             snprintf(f.exefs, sizeof f.exefs, "%s", ""), g_state = SETUP_FAIL_NOT_FOUND;
     }
-    if (g_state >= SETUP_FAIL_NOT_FOUND) { g_running = false; return NULL; }
+    if (g_state >= SETUP_FAIL_NOT_FOUND) {
+        LOG("[setup] source validation failed total_ms=%llu\n",
+            (unsigned long long)((plat_now_ns() - setup_t0) / 1000000ull));
+        g_running = false;
+        return NULL;
+    }
 
     uint64_t cleanup_t0 = plat_now_ns();
     rt_remove_game_files(ROOT);  // (an earlier or interrupted setup's)
@@ -430,7 +436,8 @@ int setup_dry_run(const char *folder, bool redact_paths) {
     if (f.romfs_bin[0]) {
         char why[160] = "";
         if (!romfs_image_ok(f.romfs_bin, why, sizeof why)) {
-            fprintf(stderr, "[setup-dry-run] romfs.bin invalide: %s\n", why);
+            fprintf(stderr, "[setup-dry-run] romfs.bin invalide: %s\n",
+                    redact_paths ? "détail masqué" : why);
             return 2;
         }
     }
