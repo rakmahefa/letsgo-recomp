@@ -204,6 +204,17 @@ jobs:
           cp third_party/fonts/Baloo2/OFL.txt "$bindir/Baloo2-OFL.txt"
           cp LICENSE "$bindir/LICENSE.txt"
           cp LICENSE-LASRecomp "$bindir/LICENSE-LASRecomp.txt"
+
+          # Fail here, before linuxdeploy, if any runtime/setup dependency or main notice is missing.
+          test -x "$bindir/LetsGoRecomp"
+          test -x "$bindir/lasgen/lasgen"
+          test -x "$bindir/zig/zig"
+          for resource in cpu.h simd.h simd_fp.h gamelib.h gamelib_entry.c hle_symbols.txt; do
+            test -s "$bindir/gamelib-src/$resource"
+          done
+          for notice in LICENSE.txt LICENSE-LASRecomp.txt Baloo2-OFL.txt; do
+            test -s "$bindir/$notice"
+          done
           install -m 644 build/licenses/FFmpeg-LGPL-2.1.txt "$appdir/usr/share/licenses/LetsGoRecomp/"
           install -m 644 build/licenses/SDL-LICENSE.txt "$appdir/usr/share/licenses/LetsGoRecomp/"
           install -m 644 build/licenses/VMA-LICENSE.txt "$appdir/usr/share/licenses/LetsGoRecomp/"
@@ -386,6 +397,9 @@ jobs:
           env -u LARECOMP_DATA_ROOT -u LARECOMP_GEN -u LARECOMP_CC \
             HOME="$smoke_home" XDG_DATA_HOME="$smoke_xdg" APPIMAGE_EXTRACT_AND_RUN=1 \
             "$appimage" --self-test
+          test -d "$smoke_xdg/lasrecomp" || {
+            echo "AppImage self-test did not create the expected XDG data root." >&2; exit 1;
+          }
           test ! -e "$smoke_xdg/lasrecomp/extracted" || {
             echo "AppImage self-test unexpectedly created game files." >&2; exit 1;
           }
