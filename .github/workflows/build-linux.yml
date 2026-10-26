@@ -139,20 +139,31 @@ jobs:
       - name: Set up Python generator
         run: |
           python3 -m venv .venv
-          .venv/bin/python -m pip install --upgrade pip
-          .venv/bin/python -m pip install capstone unicorn lz4 pyinstaller
+          .venv/bin/python -m pip install --upgrade 'pip==25.2'
+          .venv/bin/python -m pip install -r tools/requirements-linux-generator.txt
 
       - name: Build native Linux runtime
         run: make -j2 CC=clang-21 CXX=clang++-21 DEPS=/usr/local SHADERC=-lshaderc_combined build/lasrecomp
 
       - name: Build standalone game-code generator
         run: |
+          set -euo pipefail
           .venv/bin/python -m PyInstaller --noconfirm --clean --log-level WARN \
             --distpath build/helper --workpath build/pyinstaller tools/lasgen.spec
           test -x build/helper/lasgen/lasgen
+          build/helper/lasgen/lasgen --help >/dev/null
+
+      - name: Test setup dry-run with synthetic fixtures
+        run: |
+          set -euo pipefail
+          build/lasrecomp --version
+          .venv/bin/python tests/test_setup_dry_run.py --binary build/lasrecomp
 
       - name: Fetch pinned Linux Zig compiler
-        run: bash tools/fetch_zig.sh
+        run: |
+          set -euo pipefail
+          bash tools/fetch_zig.sh
+          build/zig/zig version
 
       - name: Assemble self-contained AppDir
         shell: bash
@@ -245,6 +256,12 @@ jobs:
           EOF
           chmod 755 "$appdir/LetsGoRecomp"
 
+          # Capture tool versions and hashes of payload files before packaging.
+          .venv/bin/python tools/write_linux_metadata.py \
+            --appdir "$appdir" --version "$version" --commit "$GITHUB_SHA" --ref "$GITHUB_REF" \
+            --python .venv/bin/python --zig build/zig/zig --clang clang-21 \
+            --ffmpeg 6.1.6 --sdl release-3.4.18 --vulkan-headers v1.3.296 --vma v3.1.0 --shaderc v2024.4
+
       - name: Build AppImage and verify bundled runtime
         shell: bash
         run: |
@@ -335,11 +352,42 @@ jobs:
             echo "$extracted_ldd" >&2
             exit 1
           fi
+          python3 "$GITHUB_WORKSPACE/tools/audit_linux_elf.py" \
+            --root "$extracted" --report "$GITHUB_WORKSPACE/build/dist/linux-elf-audit.json" \
+            --require-bundled libavformat.so.60 --require-bundled libavcodec.so.60 \
+            --require-bundled libavutil.so.58 --require-bundled libswscale.so.7
+
+          version_output="$(APPIMAGE_EXTRACT_AND_RUN=1 "$appimage" --version)"
+          [[ "$version_output" == "Let's Go Recomp $version" ]] || {
+            echo "AppImage --version probe failed: $version_output" >&2; exit 1;
+          }
+
+          smoke_home="$GITHUB_WORKSPACE/build/dist/appimage-smoke/home"
+          smoke_xdg="$GITHUB_WORKSPACE/build/dist/appimage-smoke/xdg"
+          mkdir -p "$smoke_home" "$smoke_xdg"
+          env -u LARECOMP_DATA_ROOT -u LARECOMP_GEN -u LARECOMP_CC \
+            HOME="$smoke_home" XDG_DATA_HOME="$smoke_xdg" APPIMAGE_EXTRACT_AND_RUN=1 \
+            "$appimage" --self-test
+          test ! -e "$smoke_xdg/lasrecomp/extracted" || {
+            echo "AppImage self-test unexpectedly created game files." >&2; exit 1;
+          }
+
+          cp "$appdir/BUILD-INFO.txt" "$GITHUB_WORKSPACE/build/dist/BUILD-INFO.txt"
+          cp "$appdir/build-manifest.json" "$GITHUB_WORKSPACE/build/dist/build-manifest.json"
+          cp "$appdir/sbom.cdx.json" "$GITHUB_WORKSPACE/build/dist/sbom.cdx.json"
 
           cd "$GITHUB_WORKSPACE"
           tar -C build/dist -czf "build/dist/LetsGoRecomp-${version}-linux-x86_64.tar.gz" LetsGoRecomp
           sha256sum "build/dist/LetsGoRecomp-${version}-linux-x86_64.tar.gz" > "build/dist/LetsGoRecomp-${version}-linux-x86_64.tar.gz.sha256"
           sha256sum "$appimage" > "$appimage.sha256"
+          .venv/bin/python tools/write_release_manifest.py \
+            --appimage "$appimage" \
+            --archive "$GITHUB_WORKSPACE/build/dist/LetsGoRecomp-${version}-linux-x86_64.tar.gz" \
+            --manifest "$GITHUB_WORKSPACE/build/dist/build-manifest.json" \
+            --sbom "$GITHUB_WORKSPACE/build/dist/sbom.cdx.json" \
+            --elf-report "$GITHUB_WORKSPACE/build/dist/linux-elf-audit.json" \
+            --output "$GITHUB_WORKSPACE/build/dist/build-manifest-release.json" \
+            --run-id "$GITHUB_RUN_ID" --repository "$GITHUB_REPOSITORY"
 
       - name: Upload deployable Linux bundles
         uses: actions/upload-artifact@v4
@@ -350,6 +398,11 @@ jobs:
             build/dist/LetsGoRecomp-*-linux-x86_64.tar.gz.sha256
             build/dist/LetsGoRecomp-*-linux-x86_64.AppImage
             build/dist/LetsGoRecomp-*-linux-x86_64.AppImage.sha256
+            build/dist/BUILD-INFO.txt
+            build/dist/build-manifest.json
+            build/dist/build-manifest-release.json
+            build/dist/sbom.cdx.json
+            build/dist/linux-elf-audit.json
           if-no-files-found: error
           retention-days: 30
 
@@ -364,7 +417,7 @@ jobs:
             echo
             echo "Recommended download: the **LetsGoRecomp-*-linux-x86_64.AppImage** asset. The FFmpeg and SDL3 runtime libraries are bundled, shaderc is linked statically; Vulkan drivers and system graphics/audio integration remain host-provided."
             echo
-            echo "The self-contained directory archive and SHA-256 checksums are also attached as **letsgo-recomp-linux-x86_64**."
+            echo "The self-contained directory archive, checksums, build provenance, CycloneDX SBOM and ELF dependency audit are also attached as **letsgo-recomp-linux-x86_64**."
             echo
             echo "To publish these assets as a GitHub Release, open [Publish Linux release workflow](https://github.com/${GH_REPOSITORY}/actions/workflows/publish-linux.yml) and choose **Run workflow**. Supply this run ID: ` ${RUN_ID} `."
             echo
