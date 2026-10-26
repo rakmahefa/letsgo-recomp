@@ -57,6 +57,10 @@ In the game, **F12** opens the same settings, applied at once:
 | RAM | about 4 GB while playing (5.2 GB during the one-time setup) |
 | Disk | about 6 GB free |
 
+## Linux (experimental)
+
+The native Linux x86_64 AppImage and self-contained archive are experimental; CI checks the bundle and its dependencies, but full gameplay and real-GPU compatibility are not yet certified. See the [Linux guide](docs/LINUX.md) for system requirements, FUSE fallback, SHA-256 verification, data locations, and troubleshooting. No game files are included.
+
 ## Supported games
 
 - *Let's Go, Eevee!* and *Let's Go, Pikachu!*, any region, from your own dump (cartridge or eShop)
