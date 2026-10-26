@@ -11,6 +11,7 @@ set -euo pipefail
 [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-linux$ ]] || {
   echo "Tag must be exactly v<major>.<minor>.<patch>-linux." >&2; exit 1;
 }
+tag_version="${BASH_REMATCH[1]}"
 
 ARTIFACT_DIR=artifact
 rm -rf "$ARTIFACT_DIR"
@@ -66,12 +67,21 @@ bundle_sha="$(verify_sha256 "${bundles[0]}" "${bundle_checksums[0]}")"
 appimage_sha="$(verify_sha256 "${appimages[0]}" "${appimage_checksums[0]}")"
 
 # The archive gives an independently inspectable copy of the metadata embedded in the AppDir.
-tar -tzf "${bundles[0]}" | grep -Fxq 'LetsGoRecomp/build-manifest.json'
-tar -tzf "${bundles[0]}" | grep -Fxq 'LetsGoRecomp/BUILD-INFO.txt'
-tar -tzf "${bundles[0]}" | grep -Fxq 'LetsGoRecomp/sbom.cdx.json'
-tar -tzf "${bundles[0]}" | grep -Fxq 'LetsGoRecomp/usr/bin/lasgen/lasgen'
-tar -tzf "${bundles[0]}" | grep -Fxq 'LetsGoRecomp/usr/bin/zig/zig'
-tar -tzf "${bundles[0]}" | grep -Fxq 'LetsGoRecomp/AppRun'
+tar -tzf "${bundles[0]}" > "$ARTIFACT_DIR/archive-files.txt"
+for required in \
+  'LetsGoRecomp/build-manifest.json' \
+  'LetsGoRecomp/BUILD-INFO.txt' \
+  'LetsGoRecomp/sbom.cdx.json' \
+  'LetsGoRecomp/usr/bin/lasgen/lasgen' \
+  'LetsGoRecomp/usr/bin/zig/zig' \
+  'LetsGoRecomp/AppRun'; do
+  grep -Fxq "$required" "$ARTIFACT_DIR/archive-files.txt" || {
+    echo "Archive is missing required bundle file: $required" >&2; exit 1;
+  }
+done
+if grep -Eq '(^/|(^|/)\.\.(/|$))' "$ARTIFACT_DIR/archive-files.txt"; then
+  echo "Archive contains an absolute or parent-traversal path." >&2; exit 1;
+fi
 tar -xOf "${bundles[0]}" LetsGoRecomp/build-manifest.json > "$ARTIFACT_DIR/embedded-build-manifest.json"
 tar -xOf "${bundles[0]}" LetsGoRecomp/BUILD-INFO.txt > "$ARTIFACT_DIR/embedded-BUILD-INFO.txt"
 tar -xOf "${bundles[0]}" LetsGoRecomp/sbom.cdx.json > "$ARTIFACT_DIR/embedded-sbom.cdx.json"
@@ -89,7 +99,7 @@ manifest_ref="$(jq -er '.source_ref' "$ARTIFACT_DIR/build-manifest.json")"
 [[ "$manifest_sha" == "$source_sha" && "$manifest_ref" == "refs/heads/main" ]] || {
   echo "Build manifest provenance does not match the selected run SHA/ref." >&2; exit 1;
 }
-[[ "${BASH_REMATCH[1]}" == "$version" ]] || {
+[[ "$tag_version" == "$version" ]] || {
   echo "Tag version and artifact version do not match (tag=$TAG artifact=$version)." >&2; exit 1;
 }
 grep -Fxq "version=$version" "$ARTIFACT_DIR/BUILD-INFO.txt"
@@ -100,6 +110,12 @@ jq -e '.source_commit == $sha and .version == $version and
        any(.artifacts[]; .name == $appimage_name and .sha256 == $appimage_sha) and
        any(.artifacts[]; .name == $archive_name and .sha256 == $archive_sha)'   --arg sha "$source_sha" --arg version "$version"   --arg appimage_name "$(basename "${appimages[0]}")" --arg appimage_sha "$appimage_sha"   --arg archive_name "$(basename "${bundles[0]}")" --arg archive_sha "$bundle_sha"   "$ARTIFACT_DIR/build-manifest-release.json" >/dev/null
 jq -e '.errors == [] and .elf_count > 0' "$ARTIFACT_DIR/linux-elf-audit.json" >/dev/null
+manifest_copy_sha="$(sha256sum "$ARTIFACT_DIR/build-manifest.json" | awk '{ print $1 }')"
+sbom_sha="$(sha256sum "$ARTIFACT_DIR/sbom.cdx.json" | awk '{ print $1 }')"
+elf_report_sha="$(sha256sum "$ARTIFACT_DIR/linux-elf-audit.json" | awk '{ print $1 }')"
+jq -e --arg manifest_sha "$manifest_copy_sha" --arg sbom_sha "$sbom_sha" --arg elf_sha "$elf_report_sha" \
+  '.evidence.build_manifest.sha256 == $manifest_sha and .evidence.cyclonedx_sbom.sha256 == $sbom_sha and .evidence.elf_audit.sha256 == $elf_sha' \
+  "$ARTIFACT_DIR/build-manifest-release.json" >/dev/null
 
 # Test the actual AppImage code path with no write access to the repository. --version avoids SDL/GPU
 # initialization; --self-test verifies the shipped helper, Zig, and game-code headers without game files.
