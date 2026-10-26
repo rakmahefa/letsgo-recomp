@@ -13,6 +13,11 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#ifdef __linux__
+#include <fcntl.h>
+#include <linux/fs.h>
+#include <sys/ioctl.h>
+#endif
 #ifdef __APPLE__
 #include <sys/clonefile.h>
 #endif
@@ -42,7 +47,7 @@ struct Dir {
 static int by_name_dir(const void *a, const void *b) { return strcmp((*(Dir *const *)a)->name, (*(Dir *const *)b)->name); }
 static int by_name_file(const void *a, const void *b) { return strcmp((*(File *const *)a)->name, (*(File *const *)b)->name); }
 
-static unsigned long long g_hardlink_files, g_hardlink_bytes, g_copy_files, g_copy_bytes;
+static unsigned long long g_hardlink_files, g_hardlink_bytes, g_reflink_files, g_reflink_bytes, g_copy_files, g_copy_bytes;
 static uint64_t g_copy_start_ns;
 
 
@@ -281,6 +286,26 @@ static bool copy_file(const char *src, const char *dst, uint64_t size, uint64_t 
 #else
     if (link(src, dst) == 0) goto linked;  // (same volume: a hard link)
 #endif
+#ifdef __linux__
+    // Try a copy-on-write reflink on destination filesystems which support FICLONE. Hardlinks
+    // above remain the fastest safe path on the same volume; a normal byte copy remains fallback.
+    {
+        int in_fd = open(src, O_RDONLY | O_CLOEXEC);
+        int out_fd = in_fd >= 0 ? open(dst, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644) : -1;
+        if (in_fd >= 0 && out_fd >= 0 && ioctl(out_fd, FICLONE, in_fd) == 0) {
+            close(in_fd);
+            close(out_fd);
+            g_reflink_files++;
+            g_reflink_bytes += size;
+            *done += size;
+            if (progress) progress(*done, total);
+            return true;
+        }
+        if (in_fd >= 0) close(in_fd);
+        if (out_fd >= 0) close(out_fd);
+        remove(dst); // FICLONE can leave a partial destination when unsupported or out of space.
+    }
+#endif
     {
         FILE *in = fopen(src, "rb"), *out = in ? fopen(dst, "wb") : NULL;
         bool ok = in && out;
@@ -349,7 +374,7 @@ bool romfs_image_ok(const char *path, char *why, size_t why_size) {
 }
 
 bool romfs_copy_tree(const char *src, const char *dst, void (*progress)(uint64_t, uint64_t)) {
-    g_hardlink_files = g_hardlink_bytes = g_copy_files = g_copy_bytes = 0;
+    g_hardlink_files = g_hardlink_bytes = g_reflink_files = g_reflink_bytes = g_copy_files = g_copy_bytes = 0;
     g_copy_start_ns = plat_now_ns();
     Dir *t = scan(src, "", NULL, 0);
     if (!t) return false;
@@ -360,8 +385,8 @@ bool romfs_copy_tree(const char *src, const char *dst, void (*progress)(uint64_t
     bool ok = copy_dir(t, dst, &done, total, progress);
     free(l.dirs), free(l.files);
     free_tree(t);
-    fprintf(stderr, "[romfs-copy] source=%s mode=tree result=%s hardlink_or_clone_files=%llu linked_bytes=%llu copied_files=%llu copied_bytes=%llu total_ms=%llu\n",
-            src, ok ? "ok" : "failed", g_hardlink_files, g_hardlink_bytes, g_copy_files, g_copy_bytes,
+    fprintf(stderr, "[romfs-copy] source=%s mode=tree result=%s hardlink_or_clone_files=%llu linked_bytes=%llu reflink_files=%llu reflink_bytes=%llu copied_files=%llu copied_bytes=%llu total_ms=%llu\n",
+            src, ok ? "ok" : "failed", g_hardlink_files, g_hardlink_bytes, g_reflink_files, g_reflink_bytes, g_copy_files, g_copy_bytes,
             (unsigned long long)((plat_now_ns() - g_copy_start_ns) / 1000000ull));
     return ok;
 }
@@ -373,8 +398,8 @@ bool romfs_copy_file(const char *src, const char *dst, void (*progress)(uint64_t
     g_copy_start_ns = plat_now_ns();
     uint64_t done = 0;
     bool ok = copy_file(src, dst, (uint64_t)st.st_size, &done, (uint64_t)st.st_size, progress);
-    fprintf(stderr, "[romfs-copy] source=%s mode=file result=%s hardlink_or_clone_files=%llu linked_bytes=%llu copied_files=%llu copied_bytes=%llu total_ms=%llu\n",
-            src, ok ? "ok" : "failed", g_hardlink_files, g_hardlink_bytes, g_copy_files, g_copy_bytes,
+    fprintf(stderr, "[romfs-copy] source=%s mode=file result=%s hardlink_or_clone_files=%llu linked_bytes=%llu reflink_files=%llu reflink_bytes=%llu copied_files=%llu copied_bytes=%llu total_ms=%llu\n",
+            src, ok ? "ok" : "failed", g_hardlink_files, g_hardlink_bytes, g_reflink_files, g_reflink_bytes, g_copy_files, g_copy_bytes,
             (unsigned long long)((plat_now_ns() - g_copy_start_ns) / 1000000ull));
     return ok;
 }
