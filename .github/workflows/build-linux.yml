@@ -409,7 +409,7 @@ jobs:
             du -sh "$appdir" "$appimage" "$GITHUB_WORKSPACE/build/dist/$archive"
             echo
             echo "Largest 25 files in AppDir (bytes, path):"
-            find "$appdir" -type f -printf '%s\t%p\n' | sort -nr | head -25 | awk -F '\t' '{ printf "%12s  %s\n", $1, $2 }'
+            find "$appdir" -type f -printf '%s\t%p\n' | sort -nr | sed -n '1,25p' | awk -F '\t' '{ printf "%12s  %s\n", $1, $2 }'
           } > "$GITHUB_WORKSPACE/build/dist/build-size-report.txt"
           cd "$GITHUB_WORKSPACE"
           .venv/bin/python tools/write_release_manifest.py \
