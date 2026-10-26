@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Install system dependencies
         run: |
@@ -393,7 +393,7 @@ jobs:
             --run-id "$GITHUB_RUN_ID" --repository "$GITHUB_REPOSITORY"
 
       - name: Upload deployable Linux bundles
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: letsgo-recomp-linux-x86_64
           path: |
