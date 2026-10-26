@@ -376,13 +376,16 @@ jobs:
           cp "$appdir/build-manifest.json" "$GITHUB_WORKSPACE/build/dist/build-manifest.json"
           cp "$appdir/sbom.cdx.json" "$GITHUB_WORKSPACE/build/dist/sbom.cdx.json"
 
+          cd "$GITHUB_WORKSPACE/build/dist"
+          archive="LetsGoRecomp-${version}-linux-x86_64.tar.gz"
+          tar -czf "$archive" LetsGoRecomp
+          # Sidecars contain only the basenames so sha256sum -c works from the download folder.
+          sha256sum "$archive" > "$archive.sha256"
+          sha256sum "$(basename "$appimage")" > "$(basename "$appimage").sha256"
           cd "$GITHUB_WORKSPACE"
-          tar -C build/dist -czf "build/dist/LetsGoRecomp-${version}-linux-x86_64.tar.gz" LetsGoRecomp
-          sha256sum "build/dist/LetsGoRecomp-${version}-linux-x86_64.tar.gz" > "build/dist/LetsGoRecomp-${version}-linux-x86_64.tar.gz.sha256"
-          sha256sum "$appimage" > "$appimage.sha256"
           .venv/bin/python tools/write_release_manifest.py \
             --appimage "$appimage" \
-            --archive "$GITHUB_WORKSPACE/build/dist/LetsGoRecomp-${version}-linux-x86_64.tar.gz" \
+            --archive "$GITHUB_WORKSPACE/build/dist/$archive" \
             --manifest "$GITHUB_WORKSPACE/build/dist/build-manifest.json" \
             --sbom "$GITHUB_WORKSPACE/build/dist/sbom.cdx.json" \
             --elf-report "$GITHUB_WORKSPACE/build/dist/linux-elf-audit.json" \
