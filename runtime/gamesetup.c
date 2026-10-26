@@ -331,6 +331,19 @@ static void *setup_thread(void *arg) {
         g_running = false;
         return NULL;
     }
+    const char *dry_run = getenv("LARECOMP_SETUP_DRY_RUN");
+    if (dry_run && !strcmp(dry_run, "1")) {
+        const char *redact = getenv("LARECOMP_SETUP_REDACT_PATHS");
+        int rc = setup_dry_run(g_folder, redact && !strcmp(redact, "1"));
+        if (rc == 0) g_state = SETUP_DRY_RUN_DONE;
+        else if (rc == 3) g_state = SETUP_FAIL_PACKAGE;
+        else if (rc == 2 || rc == 4) g_state = SETUP_FAIL_NOT_FOUND;
+        else g_state = SETUP_FAIL_NOT_FOUND;
+        LOG("[setup] env_dry_run_exit=%d total_ms=%llu; no setup writes/build processes run\n",
+            rc, (unsigned long long)((plat_now_ns() - setup_t0) / 1000000ull));
+        g_running = false;
+        return NULL;
+    }
     g_state = SETUP_LOOKING;
     Found f = {0};
     uint64_t find_t0 = plat_now_ns();
