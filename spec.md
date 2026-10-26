@@ -268,7 +268,7 @@ La chaîne de setup a été suivie dans runtime/ui/launcher_lg.mm, runtime/games
 5. `tools/gen.py` lit chaque NSO, décompresse son image, découvre les frontières de fonctions, parcourt les instructions, résout les cibles de branches/jump tables, puis écrit le C en chunks. Le code de génération utilise `unicorn` et `capstone`, mais ne crée pas de pool de threads ou de processus à lui seul : un processus `lasgen` traite un module.
 6. À mesure que chaque chunk C devient disponible, `gamebuild_run()` lance des processus de compilation indépendants `zig cc -c` jusqu'à remplir les créneaux de compilation autorisés. La génération et la compilation se chevauchent. L'édition de liens finale est une seule tâche.
 
-Le packaging du générateur est cohérent avec ce chemin : `tools/lasgen.spec` inclut les imports Python du générateur, collecte les bibliothèques natives de Capstone/Unicorn et ajoute explicitement la bibliothèque Unicorn versionnée. Le workflow Linux vérifie actuellement que `build/helper/lasgen/lasgen` existe et est exécutable, mais ce test ne suffit pas à prouver que l'exécutable démarre et charge toutes ses bibliothèques natives ; il n'y a pas encore de test de traduction réelle dans la CI.
+Le packaging du générateur collecte les bibliothèques natives de Capstone/Unicorn, la bibliothèque Unicorn versionnée et les imports requis. Un échec CI du 26 octobre 2026 a révélé deux défauts dans la spec : `pkg_resources` était exclu, puis PyInstaller 6.16/hooks-contrib 2025.10 ne résolvaient pas correctement `jaraco.text` vendored par setuptools. La correction inclut `pkg_resources`, garde `setuptools` disponible pour l'alias du module vendor et met à jour PyInstaller/hooks-contrib à 6.22.3/2026.9. Un test statique interdit le retour de ces exclusions. Le premier build après correction a confirmé que `lasgen --help` démarre avec cette combinaison ; le build complet est encore en cours. Aucun test de traduction réelle par NSO n'existe encore dans la CI.
 
 #### Limite actuelle du budget de parallélisme — risque concret à vérifier
 
@@ -361,7 +361,7 @@ Avant une copie susceptible de transférer plusieurs gigaoctets, vérifier l'esp
 - [ ] Les timings établissent le pourcentage réel du temps passé dans la recherche, la préparation RomFS, la génération et la compilation.
 - [ ] Le log de la build réelle confirme les chemins AppImage du générateur et de Zig, la valeur effective de `jobs`, le nombre de générateurs actifs et la capacité CPU/RAM détectée.
 - [ ] Le planificateur traite ensemble les quatre générateurs et les processus `zig cc` ; le pic RSS ne dépasse pas la limite de test définie et le temps est comparé à la version actuelle.
-- [ ] La CI exécute le générateur PyInstaller emballé (pas seulement `test -x`) et teste au minimum son démarrage/dépendances natives ; un fixture NSO synthétique valide la génération si disponible.
+- [x] La CI exécute désormais le générateur PyInstaller emballé avec `lasgen --help` (pas seulement `test -x`) ; le résultat du build après correction de la chaîne `pkg_resources`/`jaraco.text` doit encore être confirmé. [ ] Ajouter ensuite un fixture NSO synthétique fiable pour valider la génération réelle.
 - [ ] Les logs différencient une image RomFS construite, une image existante hard-linkée et une copie complète cross-device.
 - [ ] Le détecteur ne descend plus dans les ressources d'un RomFS reconnu pour rechercher ExeFS ; les dumps imbriqués et plats restent reconnus.
 - [ ] La barre de progression indique la phase effective et continue d'évoluer pendant les phases lentes.
@@ -432,51 +432,51 @@ Ne pas retirer arbitrairement `lib/std`, les headers glibc/musl requis, les sour
 
 ### Étape 0 — valider sans publication et mesurer le setup du jeu
 
-- [ ] Ajouter dry_run au workflow de publication, activé par défaut ; vérifier qu'aucune mutation GitHub n'est possible dans ce mode.
-- [ ] Ajouter les tests dry-run automatisés avec mocks et un test manuel workflow_dispatch sur des artefacts réels.
-- [ ] Ajouter le mode setup dry-run et confirmer qu'aucun fichier ni processus de build n'est affecté.
-- [ ] Collecter un baseline des temps de recherche, copie/scan/image RomFS, génération par module, compilation et linkage.
-- [ ] Confirmer dans le log permanent que l'AppImage sélectionne `usr/bin/lasgen/lasgen` et `usr/bin/zig/zig` et enregistrer le nombre effectif de jobs.
-- [ ] Instrumenter le pic RSS et le nombre de processus simultanés ; vérifier le surabonnement causé par `4 générateurs + jobs compilateurs`.
-- [ ] Ajouter un smoke test de `lasgen` empaqueté et, si possible, une fixture NSO synthétique pour couvrir réellement la génération.
-- [ ] Définir après mesure un budget de parallélisme global qui réserve des créneaux aux générateurs comme aux compilateurs.
-- [ ] Corriger find_game() pour ne pas explorer le contenu d'un RomFS déjà reconnu.
+- [x] Ajouter dry_run au workflow de publication, activé par défaut, avec prévalidation en lecture seule et job de publication distinct. Le mode sans mutation est aussi couvert par un test de politique ; [ ] exécuter manuellement workflow_dispatch sur un artefact réel.
+- [x] Ajouter les tests dry-run automatisés sur des fixtures synthétiques et un helper/compilateur marqueurs qui prouvent qu'ils ne sont pas lancés ; [ ] exécuter le parcours manuel workflow_dispatch sur de vrais artefacts.
+- [x] Implémenter le mode setup dry-run CLI et launcher, les codes de sortie distincts, la redaction des chemins et des fixtures avant/après avec SHA-256 ; la compilation/test du dernier commit reste à valider par CI.
+- [x] Instrumenter les durées de recherche/copie/scan/écriture, génération par module, compilation et linkage ; [ ] collecter le baseline sur une machine et un dump réels (pas de données de jeu disponibles pour la CI).
+- [x] Ajouter le log des chemins de génération/compilation, le budget global et le smoke test AppImage des outils embarqués ; confirmer les valeurs dans le journal d'un build AppImage final lorsque la CI est terminée.
+- [x] Ajouter l'échantillonnage du nombre maximal de processus enfants et du RSS des enfants directs sous Linux (échantillon ~50 ms ; les processus descendants ne sont pas comptés). Le pic de mémoire et les performances doivent encore être mesurés sur une machine cible.
+- [x] Ajouter un smoke test du `lasgen` empaqueté et de Zig sans données du jeu ; [ ] ajouter une fixture NSO synthétique pour couvrir réellement l'analyse/génération.
+- [x] Définir un budget borné commun aux générateurs et compilateurs, limité par CPU/RAM/cgroup, avec possibilité de le réduire via `LARECOMP_BUILD_JOBS`. Les valeurs doivent être ajustées uniquement après les mesures réelles.
+- [x] Corriger `find_game()` : dès qu'un RomFS est reconnu, ne pas parcourir son arbre de ressources, trier les candidats et arrêter la recherche dès que les composantes requises sont trouvées.
 
 ### Étape 1 — sécuriser la release
-- [ ] Ajouter `BUILD-INFO.txt` et version unique dans les artefacts.
-- [ ] Tester dry-run de bout en bout avant le premier test de publication réelle.
-- [ ] Valider branch/event/SHA/version du run de build.
-- [ ] Créer les tags sur le SHA exact du build.
-- [ ] Vérifier l'absence du tag Git, y compris sans release existante.
-- [ ] Placer `contents: write` uniquement sur le job de publication.
-- [ ] Ajouter des tests de versions mismatch et run non autorisé.
+- [x] Ajouter `BUILD-INFO.txt`, la version du binaire, le manifeste de build et un manifeste de release avec SHA-256 des artefacts.
+- [x] Implémenter et tester la politique de dry-run sans jeton de publication ; [ ] exécuter workflow_dispatch avec de vrais artefacts et vérifier visuellement le résumé avant toute publication réelle.
+- [x] Valider automatiquement workflow, event `push`, branche `main`, dépôt source, SHA complet, ref, tag/version et noms exacts des artefacts ; ajouter des tests positifs/négatifs.
+- [x] Le job de publication passe explicitement le SHA source validé à `gh release create --target`.
+- [x] Refuser la publication si le tag Git ou la release existe déjà ; distinguer le HTTP 404 d'une erreur réseau/permissions.
+- [x] `contents: write` uniquement dans le job `publish`; tous les jobs de prévalidation et les évènements PR sont en lecture seule.
+- [x] Ajouter des tests positifs/négatifs pour tag, workflow/run, branche/dépôt/SHA, version et noms d'artefact.
 
 ### Étape 2 — rendre le bundle testable
-- [ ] Vérifier chaque ELF et ses dépendances dans l'AppDir.
-- [ ] Ajouter un mode self-test/version ou un smoke test contrôlé.
-- [ ] Lancer le véritable AppImage en test avec extraction de repli.
-- [ ] Tester le helper et Zig sans utiliser les données du jeu.
-- [ ] Garder une allowlist des bibliothèques hôte.
+- [x] Ajouter l'audit de tous les ELF de l'AppImage extrait, avec liste autorisée des dépendances hôte et vérification des SONAME FFmpeg requis ; résultat CI du dernier commit en attente.
+- [x] Ajouter `--version` avant initialisation SDL et `--self-test` qui vérifie ressources et outils embarqués sans données du jeu.
+- [x] Ajouter à la CI un lancement de l'AppImage avec `APPIMAGE_EXTRACT_AND_RUN=1`, `--version` et `--self-test`; résultat sur le dernier commit encore à confirmer.
+- [x] Tester `lasgen --help` et `zig version` empaquetés sans charger de dump.
+- [x] Ajouter une allowlist des bibliothèques Linux hôte ; toute dépendance non résolue ou non autorisée fait échouer l'audit.
 
 ### Étape 3 — verrouiller les entrées et notices
-- [ ] Ajouter les hashes de tous les téléchargements exécutés.
-- [ ] Pinner les actions et commits de sources.
-- [ ] Ajouter le lock Python.
-- [ ] Générer manifeste et SBOM.
-- [ ] Compléter le staging des licences et valider leur présence.
+- [ ] Plusieurs binaires/archives ont un SHA-256 vérifié et plusieurs dépôts Git sont pinnés par commit ; [ ] compléter les hashes pour chaque dépendance transitive (notamment `git-sync-deps` de shaderc et dépendances d'OS).
+- [x] Pinner les actions GitHub par SHA immuable et plusieurs commits de sources ; le fichier `tools/linux-dependencies.json` énumère les références.
+- [x] Ajouter `tools/requirements-linux-generator.txt` avec des versions directes exactes ; [ ] produire un lock de toutes les dépendances transitives avec hashes pour installation reproductible.
+- [x] Générer le manifeste de build avec inventaire SHA-256, provenance, lock de dépendances, SBOM CycloneDX et manifeste final des artefacts.
+- [x] Stager les notices livrées et vérifier leur présence avant packaging ; l'audit complet des licences/composants du SBOM reste à réviser.
 
 ### Étape 4 — mesurer et accélérer
-- [ ] Enregistrer les temps par étape et la taille par sous-répertoire.
+- [x] Enregistrer les durées des phases runtime et le temps total du job ; générer un rapport de taille du bundle et les 25 fichiers les plus volumineux.
 - [ ] Activer pip cache, cache des archives vérifiées puis `ccache`.
 - [ ] Comparer temps à cache chaud/froid.
 - [ ] Augmenter le parallélisme seulement après mesure de la mémoire.
 - [ ] Refaire les mêmes tests post-cache pour exclure une corruption incrémentale.
 
 ### Étape 5 — clarifier le support Linux
-- [ ] Documenter AppImage et archive tar.gz dans le README.
-- [ ] Documenter les dépendances hôte et FUSE 2.
-- [ ] Corriger les commentaires Makefile périmés.
-- [ ] Publier le statut réel de validation gameplay.
+- [x] Documenter l'AppImage et l'archive tar.gz dans le README et `docs/LINUX.md`.
+- [x] Documenter GLIBC/Vulkan, intégration graphique/audio hôte, FUSE 2 et le mode d'extraction de repli.
+- [x] Mettre à jour les commentaires Makefile sur le statut expérimental Linux.
+- [x] Documenter que le gameplay bout en bout et la compatibilité GPU réelle ne sont pas certifiés par les tests CI.
 - [ ] Décider séparément si ARM64 devient une cible officielle.
 
 ## 13. Définition de terminé (DoD)

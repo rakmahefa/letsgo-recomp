@@ -1,22 +1,24 @@
 name: Publish Linux release from successful build
 
 on:
-  # Validate the workflow on the feature branch without publishing anything.
+  # Push/PR events only lint this workflow; the read-only validation job is dispatch-only.
   push:
     branches: ["feature/native-linux"]
     paths:
       - ".github/workflows/publish-linux.yml"
+      - "tools/validate_linux_release.sh"
   pull_request:
     paths:
       - ".github/workflows/publish-linux.yml"
+      - "tools/validate_linux_release.sh"
   workflow_dispatch:
     inputs:
       run_id:
-        description: Successful Linux build workflow run ID (shown in its summary)
+        description: Successful Linux native build run ID (from its summary)
         required: true
         type: string
       tag:
-        description: New release tag, for example v0.6.1-linux. Must not already exist.
+        description: New release tag; must match the artifact version (for example v0.7.5-linux)
         required: true
         type: string
       release_name:
@@ -29,89 +31,117 @@ on:
         required: true
         default: true
         type: boolean
+      dry_run:
+        description: Validate everything but do not create a tag or release
+        required: true
+        default: true
+        type: boolean
 
+# The workflow's default token can never publish. Only the conditional publish job receives contents:write.
 permissions:
   actions: read
-  contents: write
+  contents: read
 
 jobs:
-  # Push and PR runs prove GitHub can load this workflow; they never publish a release.
   validate-workflow:
     if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-24.04
     steps:
-      - name: Confirm publish workflow is loadable
-        run: echo "Publish workflow syntax loaded. Release publishing is disabled for push and pull_request events."
+      - name: Check out PR source for read-only release policy tests
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-  publish:
-    if: github.event_name == 'workflow_dispatch'
+      - name: Validate release tooling and dry-run policy without credentials
+        run: |
+          set -euo pipefail
+          bash -n tools/validate_linux_release.sh
+          python3 -m py_compile \
+            tools/release_policy.py tools/audit_linux_elf.py \
+            tools/write_linux_metadata.py tools/write_release_manifest.py \
+            tests/test_linux_release_policy.py tests/test_setup_dry_run.py tests/test_lasgen_spec.py
+          python3 tests/test_linux_release_policy.py
+          python3 tests/test_lasgen_spec.py
+          python3 -m json.tool tools/linux-dependencies.json >/dev/null
+          echo "Read-only policy and syntax checks passed; no publication token or write permission is available."
+
+  preflight:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
     steps:
-      - name: Validate build run
+      - name: Check out release validator
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: main
+
+      - name: Validate candidate without write permissions
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           RUN_ID: ${{ inputs.run_id }}
+          TAG: ${{ inputs.tag }}
+        run: bash tools/validate_linux_release.sh
+
+      - name: Summarize preflight
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          TAG: ${{ inputs.tag }}
+          RELEASE_NAME: ${{ inputs.release_name }}
+          PRERELEASE: ${{ inputs.prerelease }}
         run: |
           set -euo pipefail
-          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo "run_id must be numeric" >&2; exit 1; }
-          gh run view "$RUN_ID" --repo "$REPOSITORY" --json status,conclusion,workflowName,event
-          status="$(gh run view "$RUN_ID" --repo "$REPOSITORY" --json status --jq .status)"
-          conclusion="$(gh run view "$RUN_ID" --repo "$REPOSITORY" --json conclusion --jq .conclusion)"
-          workflow="$(gh run view "$RUN_ID" --repo "$REPOSITORY" --json workflowName --jq .workflowName)"
-          [[ "$status" == completed && "$conclusion" == success && "$workflow" == "Linux native build" ]] || {
-            echo "Refusing to publish: the run must be a successful Linux native build." >&2; exit 1;
-          }
-          gh run download "$RUN_ID" --repo "$REPOSITORY" --name letsgo-recomp-linux-x86_64 --dir artifact
+          version="$(jq -r '.version' artifact/build-manifest.json)"
+          source_sha="$(jq -r '.source_commit' artifact/build-manifest.json)"
+          bundles=(artifact/LetsGoRecomp-*-linux-x86_64.tar.gz)
+          appimages=(artifact/LetsGoRecomp-*-linux-x86_64.AppImage)
+          {
+            echo "## Linux release preflight"
+            echo
+            echo "- Candidate: **$RELEASE_NAME** (`$TAG`)"
+            echo "- Version / source: `$version` / `$source_sha`"
+            echo "- Prerelease: `$PRERELEASE`"
+            echo "- Validation: passed (run provenance, source SHA, strict artifact names, SHA-256, dependency lock, SBOM, ELF audit, and AppImage probes)"
+            echo
+            echo "| Asset | Size (bytes) | SHA-256 |"
+            echo "|---|---:|---|"
+            for file in "${appimages[0]}" "${bundles[0]}"; do
+              size="$(stat -c '%s' "$file")"
+              digest="$(sha256sum "$file" | awk '{print $1}')"
+              echo "| `$(basename "$file")` | $size | `$digest` |"
+            done
+            echo
+            if [[ "$DRY_RUN" == "true" ]]; then
+              echo "**DRY RUN — aucune modification GitHub effectuée : aucun tag, aucune release et aucun asset créés.**"
+              echo
+              echo "Pour publier, relancer explicitement avec `dry_run=false` ; le job de publication répétera toutes les validations avec ses propres permissions d'écriture."
+            else
+              echo "Prévalidation réussie ; le job distinct de publication répétera toutes les validations avant de créer le tag/la release."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Validate bundles, checksums and tag
+  publish:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.dry_run == false
+    needs: preflight
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Check out release validator
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: main
+
+      - name: Re-validate candidate with write permission scoped to this job
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ inputs.run_id }}
           TAG: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
-          [[ "$TAG" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "Invalid tag name" >&2; exit 1; }
+        run: bash tools/validate_linux_release.sh
 
-          bundles=(artifact/LetsGoRecomp-*-linux-x86_64.tar.gz)
-          bundle_checksums=(artifact/LetsGoRecomp-*-linux-x86_64.tar.gz.sha256)
-          appimages=(artifact/LetsGoRecomp-*-linux-x86_64.AppImage)
-          appimage_checksums=(artifact/LetsGoRecomp-*-linux-x86_64.AppImage.sha256)
-
-          [[ "${#bundles[@]}" -eq 1 && -f "${bundles[0]}" ]] || {
-            echo "Expected exactly one self-contained Linux directory archive." >&2; exit 1;
-          }
-          [[ "${#bundle_checksums[@]}" -eq 1 && -f "${bundle_checksums[0]}" ]] || {
-            echo "Expected exactly one archive SHA-256 checksum." >&2; exit 1;
-          }
-          [[ "${#appimages[@]}" -eq 1 && -f "${appimages[0]}" ]] || {
-            echo "Expected exactly one Linux x86_64 AppImage." >&2; exit 1;
-          }
-          [[ "${#appimage_checksums[@]}" -eq 1 && -f "${appimage_checksums[0]}" ]] || {
-            echo "Expected exactly one AppImage SHA-256 checksum." >&2; exit 1;
-          }
-
-          verify_sha256() {
-            local file="$1" checksum_file="$2" expected actual
-            expected="$(awk 'NR == 1 { print $1 }' "$checksum_file")"
-            actual="$(sha256sum "$file" | awk '{ print $1 }')"
-            [[ "$expected" =~ ^[[:xdigit:]]{64}$ ]] || {
-              echo "Invalid SHA-256 digest in $checksum_file." >&2; exit 1;
-            }
-            [[ "$actual" == "$expected" ]] || {
-              echo "SHA-256 mismatch for $file." >&2; exit 1;
-            }
-            echo "SHA-256 verified for $file."
-          }
-          verify_sha256 "${bundles[0]}" "${bundle_checksums[0]}"
-          verify_sha256 "${appimages[0]}" "${appimage_checksums[0]}"
-
-          if gh release view "$TAG" --repo "$REPOSITORY" >/dev/null 2>&1; then
-            echo "Release/tag $TAG already exists; refusing to overwrite it." >&2
-            exit 1
-          fi
-
-      - name: Create GitHub Release and upload Linux bundles
+      - name: Create release pointing at the validated source commit
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
@@ -120,14 +150,33 @@ jobs:
           PRERELEASE: ${{ inputs.prerelease }}
         run: |
           set -euo pipefail
+          source_sha="$(jq -er '.source_commit' artifact/build-manifest.json)"
           bundles=(artifact/LetsGoRecomp-*-linux-x86_64.tar.gz)
           bundle_checksums=(artifact/LetsGoRecomp-*-linux-x86_64.tar.gz.sha256)
           appimages=(artifact/LetsGoRecomp-*-linux-x86_64.AppImage)
           appimage_checksums=(artifact/LetsGoRecomp-*-linux-x86_64.AppImage.sha256)
-          args=(release create "$TAG"
+          assets=(
             "${bundles[0]}" "${bundle_checksums[0]}"
             "${appimages[0]}" "${appimage_checksums[0]}"
-            --repo "$REPOSITORY" --title "$RELEASE_NAME"
-            --notes "Recommended download: the Linux x86_64 AppImage, which bundles SDL3 and LGPL-only FFmpeg runtime libraries. Requires a compatible Vulkan 1.3 loader/GPU driver and host graphics/audio integration libraries. If FUSE 2 is unavailable, try APPIMAGE_EXTRACT_AND_RUN=1. The self-contained directory archive is also provided. Requires a legally obtained copy of the game; no game files are included.")
+            artifact/BUILD-INFO.txt
+            artifact/DEPENDENCIES.json
+            artifact/build-size-report.txt
+            artifact/build-manifest.json
+            artifact/build-manifest-release.json
+            artifact/sbom.cdx.json
+            artifact/linux-elf-audit.json
+          )
+          args=(release create "$TAG" "${assets[@]}"
+            --repo "$REPOSITORY"
+            --target "$source_sha"
+            --title "$RELEASE_NAME"
+            --notes "Recommended download: the Linux x86_64 AppImage. The bundle includes BUILD-INFO.txt, a payload SHA-256 inventory, a CycloneDX SBOM, a complete ELF dependency audit, and SHA-256 sidecars. Requires a compatible Vulkan 1.3 loader/GPU driver and host desktop graphics/audio integration libraries. If FUSE 2 is unavailable, try APPIMAGE_EXTRACT_AND_RUN=1. The self-contained directory archive is also provided. Requires a legally obtained copy of the game; no game files are included.")
           if [[ "$PRERELEASE" == true ]]; then args+=(--prerelease); fi
           gh "${args[@]}"
+          {
+            echo "## Linux release published"
+            echo
+            echo "- Tag: `$TAG`"
+            echo "- Source commit: `$source_sha`"
+            echo "- Target was set explicitly to the validated build commit."
+          } >> "$GITHUB_STEP_SUMMARY"

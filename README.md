@@ -1,6 +1,6 @@
 # Let's Go Recomp
 
-A native Windows port of **Pokémon: Let's Go, Eevee!** and **Let's Go, Pikachu!** (Nintendo Switch), made by
+A native Windows port and experimental Linux x86_64 build of **Pokémon: Let's Go, Eevee!** and **Let's Go, Pikachu!** (Nintendo Switch), made by
 **static recompilation**: the game's ARM64 code is translated into C and compiled for your PC, and a runtime stands in
 for the Switch (system services, NVN graphics on Vulkan, audio, controllers). **It is not an emulator.** Built on
 **[LAS Recomp](https://github.com/peiikai/LASRecomp)** by Peiikai.
@@ -56,6 +56,10 @@ In the game, **F12** opens the same settings, applied at once:
 | GPU | Vulkan 1.3 |
 | RAM | about 4 GB while playing (5.2 GB during the one-time setup) |
 | Disk | about 6 GB free |
+
+## Linux (experimental)
+
+The native Linux x86_64 AppImage and self-contained archive are experimental; CI checks the bundle and its dependencies, but full gameplay and real-GPU compatibility are not yet certified. See the [Linux guide](docs/LINUX.md) for system requirements, FUSE fallback, SHA-256 verification, data locations, and troubleshooting. No game files are included.
 
 ## Supported games
 

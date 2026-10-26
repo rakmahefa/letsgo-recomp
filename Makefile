@@ -1,6 +1,6 @@
 # Let's Go Recomp build (from LAS Recomp's).
-# Windows (the supported platform): MSYS2 UCRT64 shell or Git Bash with MSYS2 on PATH, clang + Vulkan renderer
-# (docs/COMPILAR-WINDOWS.md). The Linux branch is LAS Recomp's, kept but untested here.
+# Windows: MSYS2 UCRT64 shell or Git Bash with MSYS2 on PATH, clang + Vulkan renderer (docs/COMPILAR-WINDOWS.md).
+# Linux x86_64: experimental CI/release build; bundle and setup diagnostics are tested, gameplay/GPU compatibility is not certified (docs/LINUX.md).
 #   make gen           translate your own game files (extracted/exefs) into generated/
 #   make -j20          build/lasrecomp.exe (runtime) and build/lasgame.dll (the game code)
 #   make jogo          a copy to play while build/ is rebuilt (build/jogo/)
