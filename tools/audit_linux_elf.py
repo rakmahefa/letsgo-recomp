@@ -25,6 +25,16 @@ HOST_ALLOWLIST = [
     r"^libpipewire-[^/]+\.so(?:\.|$)", r"^libspa-[^/]+\.so(?:\.|$)", r"^libibus-1\.0\.so(?:\.|$)",
     r"^libz\.so(?:\.|$)", r"^libbz2\.so(?:\.|$)", r"^libffi\.so(?:\.|$)",
     r"^libuuid\.so(?:\.|$)", r"^libexpat\.so(?:\.|$)", r"^libgcc_s\.so(?:\.|$)",
+    r"^libXau\.so(?:\.|$)", r"^libXdmcp\.so(?:\.|$)", r"^libbsd\.so(?:\.|$)",
+    r"^libmd\.so(?:\.|$)", r"^libpcre2-[^/]+\.so(?:\.|$)", r"^libselinux\.so(?:\.|$)",
+    r"^libcap\.so(?:\.|$)", r"^libgpg-error\.so(?:\.|$)", r"^libkeyutils\.so(?:\.|$)",
+    r"^libnss_[^/]+\.so(?:\.|$)", r"^libnsl\.so(?:\.|$)", r"^libtirpc\.so(?:\.|$)",
+    r"^libgcrypt\.so(?:\.|$)", r"^libzstd\.so(?:\.|$)", r"^liblzma\.so(?:\.|$)",
+    r"^libtinfo\.so(?:\.|$)", r"^libncurses[^/]*\.so(?:\.|$)", r"^libgomp\.so(?:\.|$)",
+    r"^libatomic\.so(?:\.|$)", r"^libnuma\.so(?:\.|$)", r"^libunwind\.so(?:\.|$)",
+    r"^libicu[^/]*\.so(?:\.|$)", r"^libssl\.so(?:\.|$)", r"^libcrypto\.so(?:\.|$)",
+    r"^libxml2\.so(?:\.|$)", r"^libfontconfig\.so(?:\.|$)", r"^libfreetype\.so(?:\.|$)",
+    r"^libpng[^/]*\.so(?:\.|$)", r"^libharfbuzz\.so(?:\.|$)", r"^libbrotli[^/]*\.so(?:\.|$)",
 ]
 ALLOW = [re.compile(p) for p in HOST_ALLOWLIST]
 
