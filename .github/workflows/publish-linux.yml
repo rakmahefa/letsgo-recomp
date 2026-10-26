@@ -47,8 +47,20 @@ jobs:
     if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-24.04
     steps:
-      - name: Confirm this workflow is loaded without publication credentials
-        run: echo "Workflow loaded. Push and pull_request events do not validate release assets or publish."
+      - name: Check out PR source for read-only release policy tests
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Validate release tooling and dry-run policy without credentials
+        run: |
+          set -euo pipefail
+          bash -n tools/validate_linux_release.sh
+          python3 -m py_compile \
+            tools/release_policy.py tools/audit_linux_elf.py \
+            tools/write_linux_metadata.py tools/write_release_manifest.py \
+            tests/test_linux_release_policy.py tests/test_setup_dry_run.py
+          python3 tests/test_linux_release_policy.py
+          python3 -m json.tool tools/linux-dependencies.json >/dev/null
+          echo "Read-only policy and syntax checks passed; no publication token or write permission is available."
 
   preflight:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
