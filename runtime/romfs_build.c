@@ -226,8 +226,8 @@ bool romfs_build(const char *dir, const char *out_path, void (*progress)(uint64_
 
     // header: tables after the file data (4-byte aligned)
     uint64_t dhash_off = (DATA_START + data + 3) & ~3ull;
-    image_bytes = fmeta_off + fsize;
     uint64_t dmeta_off = dhash_off + 4ull * nbd, fhash_off = dmeta_off + dsize, fmeta_off = fhash_off + 4ull * nbf;
+    image_bytes = fmeta_off + fsize;
     uint8_t hdr[DATA_START] = {0};
     uint64_t hv[10] = {0x50, dhash_off, 4ull * nbd, dmeta_off, dsize, fhash_off, 4ull * nbf, fmeta_off, fsize, DATA_START};
     memcpy(hdr, hv, sizeof hv);
