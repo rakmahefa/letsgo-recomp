@@ -8,10 +8,7 @@ set -euo pipefail
 : "${GH_TOKEN:?GH_TOKEN is required}"
 [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo "run_id must be numeric" >&2; exit 1; }
 [[ "$REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "Invalid repository name" >&2; exit 1; }
-[[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-linux$ ]] || {
-  echo "Tag must be exactly v<major>.<minor>.<patch>-linux." >&2; exit 1;
-}
-tag_version="${BASH_REMATCH[1]}"
+tag_version="$(python3 tools/release_policy.py tag --tag "$TAG")"
 
 ARTIFACT_DIR=artifact
 rm -rf "$ARTIFACT_DIR"
@@ -19,31 +16,7 @@ mkdir -p "$ARTIFACT_DIR"
 
 run_json="$ARTIFACT_DIR/build-run.json"
 gh api "repos/$REPOSITORY/actions/runs/$RUN_ID" > "$run_json"
-status="$(jq -r '.status // empty' "$run_json")"
-conclusion="$(jq -r '.conclusion // empty' "$run_json")"
-workflow_name="$(jq -r '.name // empty' "$run_json")"
-workflow_path="$(jq -r '.path // empty' "$run_json")"
-event="$(jq -r '.event // empty' "$run_json")"
-branch="$(jq -r '.head_branch // empty' "$run_json")"
-source_sha="$(jq -r '.head_sha // empty' "$run_json")"
-repository="$(jq -r '.repository.full_name // empty' "$run_json")"
-head_repository="$(jq -r '.head_repository.full_name // empty' "$run_json")"
-
-[[ "$status" == "completed" && "$conclusion" == "success" ]] || {
-  echo "Refusing publication: selected run is not completed successfully." >&2; exit 1;
-}
-[[ "$workflow_name" == "Linux native build" &&
-   ( "$workflow_path" == ".github/workflows/build-linux.yml" ||
-     "$workflow_path" == ".github/workflows/build-linux.yml@refs/heads/main" ) ]] || {
-  echo "Refusing publication: run is not the trusted Linux native build workflow." >&2; exit 1;
-}
-[[ "$event" == "push" && "$branch" == "main" ]] || {
-  echo "Refusing publication: only a successful push build from main is releasable (event=$event branch=$branch)." >&2; exit 1;
-}
-[[ "$repository" == "$REPOSITORY" && "$head_repository" == "$REPOSITORY" ]] || {
-  echo "Refusing publication: the source repository does not match the target repository." >&2; exit 1;
-}
-[[ "$source_sha" =~ ^[0-9a-f]{40}$ ]] || { echo "Build run did not provide a full source commit SHA." >&2; exit 1; }
+source_sha="$(python3 tools/release_policy.py run --run-json "$run_json" --repository "$REPOSITORY")"
 
 gh run download "$RUN_ID" --repo "$REPOSITORY" --name letsgo-recomp-linux-x86_64 --dir "$ARTIFACT_DIR"
 
@@ -101,12 +74,10 @@ cmp "$ARTIFACT_DIR/DEPENDENCIES.json" "$ARTIFACT_DIR/embedded-DEPENDENCIES.json"
 version="$(jq -er '.version' "$ARTIFACT_DIR/build-manifest.json")"
 manifest_sha="$(jq -er '.source_commit' "$ARTIFACT_DIR/build-manifest.json")"
 manifest_ref="$(jq -er '.source_ref' "$ARTIFACT_DIR/build-manifest.json")"
-[[ "$manifest_sha" == "$source_sha" && "$manifest_ref" == "refs/heads/main" ]] || {
-  echo "Build manifest provenance does not match the selected run SHA/ref." >&2; exit 1;
-}
-[[ "$tag_version" == "$version" ]] || {
-  echo "Tag version and artifact version do not match (tag=$TAG artifact=$version)." >&2; exit 1;
-}
+python3 tools/release_policy.py assets \
+  --tag "$TAG" --version "$version" \
+  --source-sha "$source_sha" --manifest-sha "$manifest_sha" --manifest-ref "$manifest_ref" \
+  --appimage "$(basename "${appimages[0]}")" --archive "$(basename "${bundles[0]}")"
 grep -Fxq "version=$version" "$ARTIFACT_DIR/BUILD-INFO.txt"
 grep -Fxq "source_commit=$source_sha" "$ARTIFACT_DIR/BUILD-INFO.txt"
 dependency_sha="$(sha256sum "$ARTIFACT_DIR/DEPENDENCIES.json" | awk '{ print $1 }')"
@@ -116,9 +87,14 @@ dependency_sha="$(sha256sum "$ARTIFACT_DIR/DEPENDENCIES.json" | awk '{ print $1 
 jq -e '.schema_version == 1 and (.dependencies | length > 0)' "$ARTIFACT_DIR/DEPENDENCIES.json" >/dev/null
 
 jq -e '.bomFormat == "CycloneDX" and (.components | length > 0)' "$ARTIFACT_DIR/sbom.cdx.json" >/dev/null
-jq -e '.source_commit == $sha and .version == $version and
-       any(.artifacts[]; .name == $appimage_name and .sha256 == $appimage_sha) and
-       any(.artifacts[]; .name == $archive_name and .sha256 == $archive_sha)'   --arg sha "$source_sha" --arg version "$version"   --arg appimage_name "$(basename "${appimages[0]}")" --arg appimage_sha "$appimage_sha"   --arg archive_name "$(basename "${bundles[0]}")" --arg archive_sha "$bundle_sha"   "$ARTIFACT_DIR/build-manifest-release.json" >/dev/null
+jq -e \
+  --arg sha "$source_sha" --arg version "$version" \
+  --arg appimage_name "$(basename "${appimages[0]}")" --arg appimage_sha "$appimage_sha" \
+  --arg archive_name "$(basename "${bundles[0]}")" --arg archive_sha "$bundle_sha" \
+  '.source_commit == $sha and .version == $version and
+   any(.artifacts[]; .name == $appimage_name and .sha256 == $appimage_sha) and
+   any(.artifacts[]; .name == $archive_name and .sha256 == $archive_sha)' \
+  "$ARTIFACT_DIR/build-manifest-release.json" >/dev/null
 jq -e '.errors == [] and .elf_count > 0' "$ARTIFACT_DIR/linux-elf-audit.json" >/dev/null
 manifest_copy_sha="$(sha256sum "$ARTIFACT_DIR/build-manifest.json" | awk '{ print $1 }')"
 sbom_sha="$(sha256sum "$ARTIFACT_DIR/sbom.cdx.json" | awk '{ print $1 }')"
