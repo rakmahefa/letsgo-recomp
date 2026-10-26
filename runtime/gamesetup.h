@@ -13,7 +13,8 @@ enum {
     SETUP_IDLE,         // nothing running
     SETUP_LOOKING,      // looking for the game files in the picked folder
     SETUP_COPYING,      // copying exefs / the RomFS image
-    SETUP_IMAGE,        // building the RomFS image from romfs/
+    SETUP_IMAGE,        // writing the RomFS image from romfs/
+    SETUP_SCANNING,     // scanning RomFS metadata before writing the image
     SETUP_READING,      // generator: translating the game code
     SETUP_COMPILING,    // compiler
     SETUP_FINISHING,    // linking
@@ -43,6 +44,9 @@ int game_build(const char *exefs);
 const char *game_version(const char *exefs);
 // Starts a setup from the picked folder (NULL: only rebuild the game code from files set up already).
 void setup_start(const char *folder);
+// Read-only source validation, safe to call before SDL/platform initialization. Returns 0 valid, 2 unrecognized,
+// 3 packed game that must be extracted, 4 access denied, or 64 for invalid arguments.
+int setup_dry_run(const char *folder, bool redact_paths);
 int setup_state(void);         // SETUP_*
 float setup_progress(void);    // 0..1 while running
 bool setup_running(void);
