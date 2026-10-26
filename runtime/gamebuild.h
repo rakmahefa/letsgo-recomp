@@ -13,8 +13,10 @@ typedef struct {
     // now and then, from the calling thread: how far the whole build is (0..1) and what it's doing
     void (*progress)(double fraction, const char *step);
     int jobs;  // global child-process budget shared by generator and compiler (>= 1)
-    int cpu_cores; // detected logical CPUs before cgroup caps
-    int ram_mib;   // detected total RAM in MiB before cgroup caps
+    int cpu_cores; // effective logical CPUs after cgroup/cpuset constraints
+    int ram_mib;   // effective RAM limit in MiB after cgroup constraint (or host total)
+    int host_cores; // SDL-detected logical CPUs before cgroup caps
+    int host_ram_mib; // SDL-detected total RAM in MiB before cgroup caps
 } GameBuildOpts;
 
 // Builds it (a few minutes). false: why says what went wrong (details in the log).
