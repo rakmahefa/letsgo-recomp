@@ -185,7 +185,8 @@ jobs:
       - name: Assemble self-contained AppDir
         shell: bash
         run: |
-          set -euo pipefail
+          set -euxo pipefail
+          trap 'rc=$?; echo "AppDir assembly failed at line ${LINENO} (exit ${rc})" >&2' ERR
           version="$(sed -n 's/^#define RT_APP_VERSION "\(.*\)".*/\1/p' runtime/paths.h)"
           test -n "$version"
 
