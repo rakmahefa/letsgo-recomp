@@ -51,7 +51,7 @@ jobs:
         run: echo "Workflow loaded. Push and pull_request events do not validate release assets or publish."
 
   preflight:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:
       actions: read
@@ -59,6 +59,8 @@ jobs:
     steps:
       - name: Check out release validator
         uses: actions/checkout@v4
+        with:
+          ref: main
 
       - name: Validate candidate without write permissions
         env:
@@ -94,7 +96,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   publish:
-    if: github.event_name == 'workflow_dispatch' && inputs.dry_run == false
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.dry_run == false
     needs: preflight
     runs-on: ubuntu-24.04
     permissions:
@@ -103,6 +105,8 @@ jobs:
     steps:
       - name: Check out release validator
         uses: actions/checkout@v4
+        with:
+          ref: main
 
       - name: Re-validate candidate with write permission scoped to this job
         env:
