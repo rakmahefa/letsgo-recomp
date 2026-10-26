@@ -92,18 +92,30 @@ jobs:
           set -euo pipefail
           version="$(jq -r '.version' artifact/build-manifest.json)"
           source_sha="$(jq -r '.source_commit' artifact/build-manifest.json)"
+          bundles=(artifact/LetsGoRecomp-*-linux-x86_64.tar.gz)
+          appimages=(artifact/LetsGoRecomp-*-linux-x86_64.AppImage)
           {
             echo "## Linux release preflight"
             echo
             echo "- Candidate: **$RELEASE_NAME** (`$TAG`)"
             echo "- Version / source: `$version` / `$source_sha`"
             echo "- Prerelease: `$PRERELEASE`"
-            echo "- Validation: passed (run provenance, source SHA, artifact inventory, checksums, SBOM, ELF audit, and AppImage probes)"
+            echo "- Validation: passed (run provenance, source SHA, strict artifact names, SHA-256, dependency lock, SBOM, ELF audit, and AppImage probes)"
+            echo
+            echo "| Asset | Size (bytes) | SHA-256 |"
+            echo "|---|---:|---|"
+            for file in "${appimages[0]}" "${bundles[0]}"; do
+              size="$(stat -c '%s' "$file")"
+              digest="$(sha256sum "$file" | awk '{print $1}')"
+              echo "| `$(basename "$file")` | $size | `$digest` |"
+            done
             echo
             if [[ "$DRY_RUN" == "true" ]]; then
-              echo "**DRY RUN:** no tag or release was created. Re-run with `dry_run=false` to publish; the publish job will repeat all validation with write permission."
+              echo "**DRY RUN — aucune modification GitHub effectuée : aucun tag, aucune release et aucun asset créés.**"
+              echo
+              echo "Pour publier, relancer explicitement avec `dry_run=false` ; le job de publication répétera toutes les validations avec ses propres permissions d'écriture."
             else
-              echo "Preflight passed. The separate publish job will repeat validation before creating the tag/release."
+              echo "Prévalidation réussie ; le job distinct de publication répétera toutes les validations avant de créer le tag/la release."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
