@@ -23,13 +23,14 @@ def main() -> int:
     p.add_argument("--archive", required=True, type=Path)
     p.add_argument("--manifest", required=True, type=Path, help="embedded build-manifest.json")
     p.add_argument("--sbom", required=True, type=Path)
+    p.add_argument("--dependencies", required=True, type=Path)
     p.add_argument("--elf-report", required=True, type=Path)
     p.add_argument("--output", required=True, type=Path)
     p.add_argument("--run-id", required=True)
     p.add_argument("--repository", required=True)
     args = p.parse_args()
 
-    for path in (args.appimage, args.archive, args.manifest, args.sbom, args.elf_report):
+    for path in (args.appimage, args.archive, args.manifest, args.sbom, args.dependencies, args.elf_report):
         if not path.is_file():
             p.error(f"missing release evidence: {path}")
     embedded = json.loads(args.manifest.read_text(encoding="utf-8"))
@@ -49,6 +50,7 @@ def main() -> int:
         "evidence": {
             "build_manifest": {"name": args.manifest.name, "sha256": sha256(args.manifest)},
             "cyclonedx_sbom": {"name": args.sbom.name, "sha256": sha256(args.sbom)},
+            "dependency_lock": {"name": args.dependencies.name, "sha256": sha256(args.dependencies)},
             "elf_audit": {"name": args.elf_report.name, "sha256": sha256(args.elf_report)},
         },
     }
